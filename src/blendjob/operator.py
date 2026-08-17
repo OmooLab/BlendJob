@@ -251,5 +251,5 @@ class JobOperatorBase:
 
     def _runtime(self):
         if self.job_runtime is None:
-            raise RuntimeError("Use BlenderJobRuntime.JobOperatorBase")
+            raise RuntimeError("Use JobRuntime.JobOperatorBase")
         return self.job_runtime

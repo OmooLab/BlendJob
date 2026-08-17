@@ -143,7 +143,8 @@ class EnvironmentController:
             return {
                 "progress": 1.0,
                 "message": f"Environment is ready; post-install failed: {self.post_error}",
-                "state": "succeeded",
+                "state": "failed",
+                "error": self.post_error,
                 "post_install_error": self.post_error,
             }
         return {
@@ -163,7 +164,7 @@ class EnvironmentController:
             return {}
 
 
-class BlenderJobRuntime:
+class JobRuntime:
     """Own one add-on's Storage Root, Environment, Server and Blender UI."""
 
     def __init__(

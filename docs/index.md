@@ -4,7 +4,7 @@
 
 `blendjob` 连接 Blender Operator 与独立 Python Job Server。开发者新增任务时只需要一个 Blender Operator 和一个 Server Handler，不需要编写提交线程、HTTP 轮询、取消、进度条、Server 进程或 Environment 安装 Operator。
 
-- `BlenderJobRuntime`：Blender 侧唯一运行时，持有 Storage Root、Environment、Server 进程和当前 Job
+- `JobRuntime`：Blender 侧唯一运行时，持有 Storage Root、Environment、Server 进程和当前 Job
 - `JobOperatorBase`：绑定 Runtime 后供业务 Operator 直接继承的 Modal Mixin
 - `JobServer`：独立 Python 进程中的 Job 注册、状态、取消、工作目录和 Resource
 - `JobContext`：Handler 的工作目录、Storage Root、进度、取消与 Resource 接口
@@ -29,6 +29,7 @@ Blender 侧把这个实例交给 Runtime。实例不会跨进程传输；Runtime
 ```python
 # snapform/job_runtime.py
 
+from blendjob import JobRuntime
 from .server import server
 
 
@@ -55,7 +56,7 @@ def post_install(runtime):
     )
 
 
-runtime = BlenderJobRuntime(
+runtime = JobRuntime(
     server,
     storage_root=storage_root,
     environment=environment,
@@ -69,7 +70,7 @@ Runtime 按约定管理 `.venv`、Manifest、安装状态与日志路径。Blend
 
 `platform_packages` 优先选择 `windows`、`macos` 或 `linux`，没有对应项时使用 `default`。基础 packages 与平台 packages 会合并安装。
 
-`post_install` 是可选的普通 callable，在 Environment 可用且 Server 能启动后执行。它不限定为 Job 列表，可以执行任意 Python；SnapForm 用它发起默认模型下载。连续 request 会分别重置进度，Status Bar 不为未知数量的 post-install 操作显示 `2/2` 等阶段总数。post-install 失败不会撤销已经安装成功的 Environment。
+`post_install` 是可选的普通 callable，在 Environment 可用且 Server 能启动后执行。它不限定为 Job 列表，可以执行任意 Python；SnapForm 用它发起默认模型下载。连续 request 会分别重置进度，Status Bar 不为未知数量的 post-install 操作显示 `2/2` 等阶段总数。post-install 失败不会撤销已经安装成功的 Environment，但 Environment 安装 Operator 会返回失败并报告原始错误。
 
 `runtime.register()` 自动注册 Environment 安装、Job 取消、Server 启动、停止、重启和日志 Operator，并挂载内建 Status Bar。Status Bar 使用可由 Blender 4.5 标记所有权的稳定函数回调，Runtime 卸载时移除同一个回调对象。业务 `CLASSES` 只包含业务类型。
 

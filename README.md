@@ -11,7 +11,7 @@ uv add blendjob
 Blender Extension 可以构建 wheel 后在 `blender_manifest.toml` 中声明：
 
 ```toml
-wheels = ["./wheels/blendjob-0.1.0-py3-none-any.whl"]
+wheels = ["./wheels/blendjob-0.1.1-py3-none-any.whl"]
 ```
 
 ## 开发
@@ -31,4 +31,3 @@ uv run mike set-default latest
 ```
 
 完整 API、Runtime 接入和 Server Handler 示例见 [docs/index.md](docs/index.md)。
-

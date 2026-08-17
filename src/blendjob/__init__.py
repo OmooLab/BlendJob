@@ -3,7 +3,7 @@
 from .client import JobClient, JobResult
 from .controller import ServerConnection, ServerController
 from .operator import JobOperatorBase, JobOperatorState
-from .runtime import BlenderJobRuntime
+from .runtime import JobRuntime
 from .server import JobCancelled, JobContext, JobServer
 
 
@@ -13,7 +13,7 @@ __all__ = (
     "JobContext",
     "JobResult",
     "JobServer",
-    "BlenderJobRuntime",
+    "JobRuntime",
     "JobOperatorBase",
     "JobOperatorState",
     "ServerConnection",
