@@ -34,17 +34,9 @@ from pathlib import Path
 from blendjob import JobRuntime
 
 
-blendjob_wheel = (
-    Path(__file__).resolve().parent
-    / "wheels"
-    / "blendjob-0.1.5-py3-none-any.whl"
-)
-
-
 environment = {
     "python": "3.10",
     "packages": [
-        str(blendjob_wheel),
         "numpy==2.4.2",
         "pillow==12.1.1",
         "av==17.0.0",
@@ -79,9 +71,9 @@ JobOperatorBase = runtime.JobOperatorBase
 
 Runtime 接收 `<python-file-or-package>:<attribute>` 格式的 Server 入口字符串；相对入口必须同时提供 `entrypoint_root`，package 目录会解析为其中的 `__init__.py`。Blender 主进程不导入 Server package，独立进程启动后才从该文件取得导出的 `JobServer`。Runtime 按约定管理 `.venv`、Manifest、安装状态与日志路径。BlendJob 根据 `environment` 字典安装固定 Python、通用的 FastAPI/Uvicorn Server 依赖、项目 packages 以及当前平台 packages。配置会生成稳定 Hash；Python 或依赖声明变化后 Environment 自动判定为需要重装，不再需要项目维护 `install_env.py` 或手工 Revision。
 
-BlendJob wheel 必须同时出现在 Extension Manifest 和 `environment["packages"]` 中：前者供 Blender 主进程导入 Runtime，后者供独立 Server Environment 执行 `python -m blendjob.runner`。示例使用 Python 3.10，也是当前最低支持版本。
+BlendJob wheel 必须出现在 Extension Manifest 中，供 Blender 主进程导入 Runtime。独立 Server Environment 会自动从 PyPI 安装与 Blender 侧相同版本的 BlendJob，从而执行 `python -m blendjob.runner`；调用方不应在 `environment["packages"]` 中重复声明 BlendJob。示例使用 Python 3.10，也是当前最低支持版本。
 
-`platform_packages` 优先选择 `windows`、`macos` 或 `linux`，没有对应项时使用 `default`。基础 packages 与平台 packages 会合并安装。
+`packages` 只声明 Job 自身的额外依赖，没有额外依赖时可以省略。`platform_packages` 优先选择 `windows`、`macos` 或 `linux`，没有对应项时使用 `default`。BlendJob Runtime packages、业务 packages 与平台 packages 会合并安装，并共同参与 Environment Hash。
 
 `post_install` 是可选的普通 callable，在 Environment 可用且 Server 能启动后执行。它不限定为 Job 列表，可以执行任意 Python；SnapForm 用它发起默认模型下载。连续 request 会分别重置进度，Status Bar 不为未知数量的 post-install 操作显示 `2/2` 等阶段总数。post-install 失败不会撤销已经安装成功的 Environment，但 Environment 安装 Operator 会返回失败并报告原始错误。
 
