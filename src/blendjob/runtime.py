@@ -561,11 +561,11 @@ class JobRuntime:
         return draw_status_bar
 
     def _server_command(self, port, instance_id):
+        launcher = Path(__file__).with_name("launcher") / "runner.py"
         return [
             str(self.environment_python()),
             "-u",
-            "-m",
-            "blendjob.runner",
+            str(launcher),
             "--entrypoint",
             self.server_entrypoint,
             "--storage-root",

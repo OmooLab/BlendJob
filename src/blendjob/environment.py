@@ -15,13 +15,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from ._version import __version__
-
-
 UV_VERSION = "0.11.3"
 ENVIRONMENT_SCHEMA = 1
 BASE_PACKAGES = (
-    f"blendjob=={__version__}",
     "fastapi==0.139.2",
     "uvicorn==0.51.0",
 )

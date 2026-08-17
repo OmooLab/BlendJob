@@ -31,10 +31,10 @@ python -m pip install "blendjob[server]"
 Blender Extension 需要把 BlendJob wheel 随扩展分发，并在 `blender_manifest.toml` 中声明：
 
 ```toml
-wheels = ["./wheels/blendjob-0.1.7-py3-none-any.whl"]
+wheels = ["./wheels/blendjob-0.1.8-py3-none-any.whl"]
 ```
 
-Runtime 会在独立 Environment 中自动安装与 Blender 侧相同版本的 BlendJob，使 Server Python 可以执行 `python -m blendjob.runner`。`packages` 只声明 Job 自身的额外依赖；没有额外依赖时可以省略：
+Runtime 通过随 Extension 分发的同一份 BlendJob wheel 启动独立 Server，不会在独立 Environment 中再次安装 BlendJob。`packages` 只声明 Job 自身的额外依赖；没有额外依赖时可以省略：
 
 ```python
 environment = {

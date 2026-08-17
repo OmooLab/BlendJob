@@ -47,7 +47,7 @@ class EnvironmentControllerTest(unittest.TestCase):
 
             self.assertFalse(status_path.exists())
 
-    def test_server_runner_uses_module_execution(self):
+    def test_server_runner_uses_bundled_launcher(self):
         runtime = SimpleNamespace(
             environment_python=lambda: Path("environment/python"),
             server_entrypoint="addon/server/__init__.py:server",
@@ -56,17 +56,11 @@ class EnvironmentControllerTest(unittest.TestCase):
 
         command = JobRuntime._server_command(runtime, 8123, "instance")
 
-        self.assertEqual(
-            command[:5],
-            [
-                str(Path("environment/python")),
-                "-u",
-                "-m",
-                "blendjob.runner",
-                "--entrypoint",
-            ],
-        )
-        self.assertNotIn("runner.py", command)
+        self.assertEqual(command[:2], [str(Path("environment/python")), "-u"])
+        self.assertEqual(Path(command[2]).name, "runner.py")
+        self.assertEqual(Path(command[2]).parent.name, "launcher")
+        self.assertEqual(command[3], "--entrypoint")
+        self.assertNotIn("blendjob.runner", command)
         self.assertIn("addon/server/__init__.py:server", command)
 
 

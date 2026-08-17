@@ -58,21 +58,25 @@ class EnvironmentTest(unittest.TestCase):
     def test_selects_platform_packages_and_server_packages(self):
         with patch.object(self.environment.sys, "platform", "win32"):
             packages = self.environment.resolved_packages(self.config())
-        self.assertIn("blendjob==0.1.7", packages)
+        self.assertFalse(
+            any(package.startswith("blendjob") for package in packages)
+        )
         self.assertIn("fastapi==0.139.2", packages)
         self.assertIn("uvicorn==0.51.0", packages)
         self.assertIn("numpy==2.4.2", packages)
         self.assertIn("onnxruntime-directml==1.24.4", packages)
         self.assertNotIn("onnxruntime==1.24.4", packages)
 
-    def test_blendjob_is_not_part_of_the_public_environment(self):
+    def test_blendjob_is_not_installed_into_server_environment(self):
         normalized = self.environment.normalized_environment(
             {"python": "3.12"}
         )
         self.assertEqual(normalized["packages"], [])
-        self.assertIn(
-            "blendjob==0.1.7",
-            self.environment.resolved_packages(normalized),
+        self.assertFalse(
+            any(
+                package.startswith("blendjob")
+                for package in self.environment.resolved_packages(normalized)
+            )
         )
 
     def test_uses_default_platform_packages(self):
@@ -107,7 +111,9 @@ class EnvironmentTest(unittest.TestCase):
                 self.environment.environment_digest(self.config()),
             )
             self.assertIn("numpy==2.4.2", manifest["packages"])
-            self.assertIn("blendjob==0.1.7", manifest["packages"])
+            self.assertFalse(
+                any(package.startswith("blendjob") for package in manifest["packages"])
+            )
             self.assertEqual(final_status["stage"], 1)
             self.assertEqual(final_status["stages"], 3)
             self.assertEqual(final_status["progress"], 1.0)
