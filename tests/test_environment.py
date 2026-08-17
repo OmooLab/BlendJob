@@ -58,7 +58,7 @@ class EnvironmentTest(unittest.TestCase):
     def test_selects_platform_packages_and_server_packages(self):
         with patch.object(self.environment.sys, "platform", "win32"):
             packages = self.environment.resolved_packages(self.config())
-        self.assertIn("blendjob==0.1.6", packages)
+        self.assertIn("blendjob==0.1.7", packages)
         self.assertIn("fastapi==0.139.2", packages)
         self.assertIn("uvicorn==0.51.0", packages)
         self.assertIn("numpy==2.4.2", packages)
@@ -71,7 +71,7 @@ class EnvironmentTest(unittest.TestCase):
         )
         self.assertEqual(normalized["packages"], [])
         self.assertIn(
-            "blendjob==0.1.6",
+            "blendjob==0.1.7",
             self.environment.resolved_packages(normalized),
         )
 
@@ -107,7 +107,7 @@ class EnvironmentTest(unittest.TestCase):
                 self.environment.environment_digest(self.config()),
             )
             self.assertIn("numpy==2.4.2", manifest["packages"])
-            self.assertIn("blendjob==0.1.6", manifest["packages"])
+            self.assertIn("blendjob==0.1.7", manifest["packages"])
             self.assertEqual(final_status["stage"], 1)
             self.assertEqual(final_status["stages"], 3)
             self.assertEqual(final_status["progress"], 1.0)

@@ -13,14 +13,15 @@ import threading
 import time
 import urllib.request
 import zipfile
-from importlib.metadata import version as distribution_version
 from pathlib import Path
+
+from ._version import __version__
 
 
 UV_VERSION = "0.11.3"
 ENVIRONMENT_SCHEMA = 1
 BASE_PACKAGES = (
-    f"blendjob=={distribution_version('blendjob')}",
+    f"blendjob=={__version__}",
     "fastapi==0.139.2",
     "uvicorn==0.51.0",
 )
