@@ -102,7 +102,49 @@ class ServerTest(unittest.TestCase):
         server.close()
         self.assertEqual(events, ["clear", "close"])
 
+    def test_close_waits_for_active_job_before_closing_resources(self):
+        events = []
+        started = threading.Event()
+        release = threading.Event()
+
+        class Resource:
+            def close(self):
+                events.append("close")
+
+        server = JobServer("Test", storage_root=self.storage_root)
+        server.add_resource("example", Resource())
+
+        @server.job("example")
+        def example(context, _parameters):
+            started.set()
+            release.wait(1.0)
+            context.resource("example")
+            events.append("job")
+
+        server.submit("example", {})
+        self.assertTrue(started.wait(1.0))
+        close_thread = threading.Thread(target=server.close)
+        close_thread.start()
+        time.sleep(0.02)
+        self.assertEqual(events, [])
+        release.set()
+        close_thread.join(1.0)
+
+        self.assertFalse(close_thread.is_alive())
+        self.assertEqual(events, ["job", "close"])
+
+    def test_closed_server_rejects_new_jobs(self):
+        server = JobServer("Test", storage_root=self.storage_root)
+
+        @server.job("example")
+        def example(_context, _parameters):
+            pass
+
+        server.close()
+
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            server.submit("example", {})
+
 
 if __name__ == "__main__":
     unittest.main()
-

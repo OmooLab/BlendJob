@@ -1,4 +1,5 @@
 site_name: BlendJob Docs
+site_url: https://docs.omoolab.xyz/blendjob/
 site_author: OmooLab
 site_description: 面向 Blender Add-on 的本地 Job Server 运行时
 

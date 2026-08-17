@@ -1,5 +1,4 @@
 import os
-import sys
 import threading
 import time
 import traceback
@@ -131,14 +130,13 @@ class JobServer:
             max_workers=1,
             thread_name_prefix="BlendJobWorker",
         )
+        self.closed = False
         self.shutdown_event = threading.Event()
         self.started_at = time.time()
         self.storage_root = Path(storage_root) if storage_root is not None else None
         self.jobs_directory = (
             self.storage_root / "jobs" if self.storage_root is not None else None
         )
-        self.entrypoint_module = None
-        self.entrypoint_path = None
 
     def bind(self, storage_root):
         """Bind the Server to the Runtime-owned Storage Root."""
@@ -210,7 +208,12 @@ class JobServer:
             return True
 
     def close(self):
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.shutdown_event.set()
+        self.executor.shutdown(wait=True, cancel_futures=True)
         for resource in reversed(tuple(self.resources.values())):
             close = getattr(resource, "close", None)
             if close is not None:
@@ -222,12 +225,6 @@ class JobServer:
             if job_type in self.handlers:
                 raise ValueError(f"Job type is already registered: {job_type}")
             self.handlers[job_type] = handler
-            if self.entrypoint_module is None:
-                self.entrypoint_module = handler.__module__
-                module = sys.modules.get(handler.__module__)
-                module_path = getattr(module, "__file__", None)
-                if module_path:
-                    self.entrypoint_path = Path(module_path).resolve()
             return handler
 
         return register
@@ -257,6 +254,8 @@ class JobServer:
         if not job_id or Path(job_id).name != job_id or job_id in {".", ".."}:
             raise ValueError(f"Invalid job id: {job_id}")
         with self.lock:
+            if self.closed:
+                raise RuntimeError("Job Server is closed")
             if job_id in self.jobs:
                 raise ValueError(f"Job id already exists: {job_id}")
             self.jobs_directory.mkdir(parents=True, exist_ok=True)

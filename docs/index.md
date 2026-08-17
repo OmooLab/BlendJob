@@ -29,13 +29,22 @@ Blender 侧把这个实例交给 Runtime。实例不会跨进程传输；Runtime
 ```python
 # snapform/job_runtime.py
 
+from pathlib import Path
+
 from blendjob import JobRuntime
-from .server import server
+
+
+blendjob_wheel = (
+    Path(__file__).resolve().parent
+    / "wheels"
+    / "blendjob-0.1.5-py3-none-any.whl"
+)
 
 
 environment = {
-    "python": "3.12",
+    "python": "3.10",
     "packages": [
+        str(blendjob_wheel),
         "numpy==2.4.2",
         "pillow==12.1.1",
         "av==17.0.0",
@@ -57,16 +66,20 @@ def post_install(runtime):
 
 
 runtime = JobRuntime(
-    server,
+    "server:server",
+    entrypoint_root=Path(__file__).parent,
     storage_root=storage_root,
     environment=environment,
     post_install=post_install,
+    namespace="snapform",
 )
 
 JobOperatorBase = runtime.JobOperatorBase
 ```
 
-Runtime 按约定管理 `.venv`、Manifest、安装状态与日志路径。BlendJob 根据 `environment` 字典安装固定 Python、通用的 FastAPI/Uvicorn Server 依赖、项目 packages 以及当前平台 packages。配置会生成稳定 Hash；Python 或依赖声明变化后 Environment 自动判定为需要重装，不再需要项目维护 `install_env.py` 或手工 Revision。
+Runtime 接收 `<python-file-or-package>:<attribute>` 格式的 Server 入口字符串；相对入口必须同时提供 `entrypoint_root`，package 目录会解析为其中的 `__init__.py`。Blender 主进程不导入 Server package，独立进程启动后才从该文件取得导出的 `JobServer`。Runtime 按约定管理 `.venv`、Manifest、安装状态与日志路径。BlendJob 根据 `environment` 字典安装固定 Python、通用的 FastAPI/Uvicorn Server 依赖、项目 packages 以及当前平台 packages。配置会生成稳定 Hash；Python 或依赖声明变化后 Environment 自动判定为需要重装，不再需要项目维护 `install_env.py` 或手工 Revision。
+
+BlendJob wheel 必须同时出现在 Extension Manifest 和 `environment["packages"]` 中：前者供 Blender 主进程导入 Runtime，后者供独立 Server Environment 执行 `python -m blendjob.runner`。示例使用 Python 3.10，也是当前最低支持版本。
 
 `platform_packages` 优先选择 `windows`、`macos` 或 `linux`，没有对应项时使用 `default`。基础 packages 与平台 packages 会合并安装。
 
@@ -249,7 +262,7 @@ Resource 在独立进程绑定 Storage Root 后创建，关闭 Server 时按注�
 
 ## Server 生命周期
 
-每个 Blender 实例为当前插件持有一个专属 Server。Runtime 自动处理随机端口、Instance ID、父 Blender PID、启动日志、连接验证、重启和停止。
+每个 Blender 实例为当前插件持有一个专属 Server。Runtime 使用 `python -m blendjob.runner` 从 Environment 启动入口，避免 package 内模块名遮蔽 Python 标准库；并自动处理随机端口、Instance ID、父 Blender PID、启动日志、连接验证、重启和停止。
 
 Server 只监听 `127.0.0.1`。当前本地专属进程协议不使用一次性 Token，不发现或复用其它 Blender 启动的 Server。
 

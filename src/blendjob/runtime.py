@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 
 from .controller import ServerController
+from .entrypoint import normalized_entrypoint
 from .environment import environment_digest, normalized_environment
 from .operator import JobOperatorBase
 
@@ -174,21 +175,27 @@ class JobRuntime:
 
     def __init__(
         self,
-        server,
+        server_entrypoint,
         *,
+        entrypoint_root=None,
         storage_root,
         environment,
+        namespace,
         post_install=None,
-        namespace=None,
     ):
-        self.server_definition = server
+        self.server_entrypoint = normalized_entrypoint(
+            server_entrypoint,
+            root=entrypoint_root,
+        )
         self.storage_root_factory = storage_root
         self.environment = normalized_environment(environment)
         self.environment_hash = environment_digest(self.environment)
         if post_install is not None and not callable(post_install):
             raise TypeError("post_install must be callable")
         self.post_install = post_install
-        self.namespace = namespace or _default_namespace(server.name)
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ValueError("namespace must be a non-empty string")
+        self.namespace = namespace.strip()
         self.active_job = None
         self.progress = 0.0
         self.message = "Ready"
@@ -554,16 +561,13 @@ class JobRuntime:
         return draw_status_bar
 
     def _server_command(self, port, instance_id):
-        entrypoint_path = self._server_entrypoint()
-        if entrypoint_path is None:
-            raise RuntimeError("Job Server does not export a Server entrypoint")
-        runner = Path(__file__).with_name("runner.py")
         return [
             str(self.environment_python()),
             "-u",
-            str(runner),
+            "-m",
+            "blendjob.runner",
             "--entrypoint",
-            str(entrypoint_path),
+            self.server_entrypoint,
             "--storage-root",
             str(self.storage_root()),
             "--host",
@@ -575,26 +579,6 @@ class JobRuntime:
             "--parent-pid",
             str(os.getpid()),
         ]
-
-    def _server_entrypoint(self):
-        candidates = []
-        for module in tuple(sys.modules.values()):
-            if getattr(module, "server", None) is not self.server_definition:
-                continue
-            module_path = getattr(module, "__file__", None)
-            if module_path:
-                candidates.append(Path(module_path).resolve())
-        package_entries = [path for path in candidates if path.name == "__init__.py"]
-        if package_entries:
-            return min(package_entries, key=lambda path: len(path.parts))
-        if candidates:
-            return min(candidates, key=lambda path: len(path.parts))
-        return self.server_definition.entrypoint_path
-
-
-def _default_namespace(server_name):
-    return str(server_name).split()[0].lower().replace("_", "-")
-
 
 def windows_creation_flags():
     if os.name != "nt":

@@ -1,12 +1,34 @@
 [project]
 name = "blendjob"
-version = "0.1.2"
+version = "0.1.5"
 description = "Reusable local Job Server runtime for Blender add-ons"
 readme = "README.md"
-requires-python = ">=3.11"
-license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "OmooLab" }]
+keywords = ["blender", "addon", "job", "server", "runtime"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = []
+
+[project.urls]
+Documentation = "https://docs.omoolab.xyz/blendjob/"
+Issues = "https://github.com/OmooLab/BlendJob/issues"
+Repository = "https://github.com/OmooLab/BlendJob"
+
+[project.optional-dependencies]
+server = [
+    "fastapi==0.139.2",
+    "uvicorn==0.51.0",
+]
 
 [dependency-groups]
 dev = [
@@ -19,5 +41,5 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.9.18,<0.10.0"]
+requires = ["uv_build>=0.11.3,<0.13.0"]
 build-backend = "uv_build"

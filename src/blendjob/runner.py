@@ -1,8 +1,10 @@
 import argparse
-import importlib
+import hashlib
+import importlib.util
 import sys
 import threading
-from pathlib import Path
+
+from .entrypoint import split_entrypoint
 
 
 def parse_args():
@@ -17,21 +19,31 @@ def parse_args():
 
 
 def load_server(entrypoint):
-    path = Path(entrypoint).resolve()
-    if path.name == "__init__.py":
-        module_root = path.parent.parent
-        module_name = path.parent.name
-    else:
-        module_root = path.parent
-        module_name = path.stem
-    addon_root = Path(__file__).resolve().parent.parent
-    for directory in (module_root, addon_root):
-        if str(directory) not in sys.path:
-            sys.path.insert(0, str(directory))
-    module = importlib.import_module(module_name)
-    server = getattr(module, "server", None)
+    path, attribute = split_entrypoint(entrypoint)
+    path = path.resolve()
+    module_name = "_blendjob_entrypoint_" + hashlib.sha256(
+        str(path).encode("utf-8")
+    ).hexdigest()
+    search_locations = [str(path.parent)] if path.name == "__init__.py" else None
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        path,
+        submodule_search_locations=search_locations,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Server entrypoint: {entrypoint}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
+    server = getattr(module, attribute, None)
     if server is None:
-        raise RuntimeError(f"Entrypoint does not export 'server': {entrypoint}")
+        raise RuntimeError(
+            f"Entrypoint does not export {attribute!r}: {entrypoint}"
+        )
     return server
 
 
