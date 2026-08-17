@@ -227,11 +227,13 @@ Runtime 是 Storage Root 的唯一配置者。`JobServer` 不需要在项目代�
 ├── jobs/
 ├── models/
 ├── tools/
-├── environment.log
-├── environment-status.json
+├── install.log
+├── install-status.json  # 仅在安装期间存在
 ├── server.log
 └── manifest.json
 ```
+
+`environment.json` 保存期望安装的 Environment 声明，`install-status.json` 只在安装期间回传进度并在任务收尾后删除，`install.log` 持久保留安装过程输出。
 
 需要 Storage Root 的 Resource 使用延迟工厂：
 

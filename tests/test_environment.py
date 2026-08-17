@@ -75,7 +75,7 @@ class EnvironmentTest(unittest.TestCase):
             uv = root / "tools" / "uv"
             uv.parent.mkdir()
             uv.touch()
-            status = root / "environment-status.json"
+            status = root / "install-status.json"
             with patch.object(
                 self.environment,
                 "install_uv",

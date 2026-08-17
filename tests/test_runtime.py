@@ -24,7 +24,7 @@ class EnvironmentControllerTest(unittest.TestCase):
         controller.process = SimpleNamespace(poll=lambda: 0, returncode=0)
         with tempfile.TemporaryDirectory() as directory, patch.object(
             runtime,
-            "environment_status_path",
+            "install_status_path",
             return_value=Path(directory) / "missing.json",
             create=True,
         ):
@@ -35,6 +35,17 @@ class EnvironmentControllerTest(unittest.TestCase):
         self.assertEqual(status["state"], "failed")
         self.assertEqual(status["error"], "model download failed")
         self.assertEqual(status["post_install_error"], "model download failed")
+
+    def test_completed_install_removes_transient_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status_path = Path(directory) / "install-status.json"
+            status_path.write_text("{}", encoding="utf-8")
+            runtime = SimpleNamespace(install_status_path=lambda: status_path)
+            controller = EnvironmentController(runtime)
+
+            controller.mark_job_complete("environment")
+
+            self.assertFalse(status_path.exists())
 
 
 if __name__ == "__main__":

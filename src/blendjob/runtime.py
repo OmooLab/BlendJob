@@ -28,13 +28,14 @@ class EnvironmentController:
     def submit(self, _job_type, _parameters):
         runtime = self.runtime
         runtime.storage_root()
+        runtime.install_status_path().unlink(missing_ok=True)
         self.post_thread = None
         self.post_status = {}
         self.post_error = ""
         self.cancelled = False
         self._post_job_id = ""
         self._post_stage = 1
-        self.log_file = runtime.environment_log_path().open(
+        self.log_file = runtime.install_log_path().open(
             "w", encoding="utf-8"
         )
         environment = os.environ.copy()
@@ -107,6 +108,10 @@ class EnvironmentController:
         if self.log_file is not None:
             self.log_file.close()
             self.log_file = None
+        try:
+            self.runtime.install_status_path().unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _run_post_install(self):
         runtime = self.runtime
@@ -156,7 +161,7 @@ class EnvironmentController:
     def _read_status(self):
         try:
             return json.loads(
-                self.runtime.environment_status_path().read_text(
+                self.runtime.install_status_path().read_text(
                     encoding="utf-8"
                 )
             )
@@ -228,11 +233,11 @@ class JobRuntime:
     def environment_config_path(self):
         return self.storage_root() / "environment.json"
 
-    def environment_status_path(self):
-        return self.storage_root() / "environment-status.json"
+    def install_status_path(self):
+        return self.storage_root() / "install-status.json"
 
-    def environment_log_path(self):
-        return self.storage_root() / "environment.log"
+    def install_log_path(self):
+        return self.storage_root() / "install.log"
 
     def server_log_path(self):
         return self.storage_root() / "server.log"
@@ -272,7 +277,7 @@ class JobRuntime:
             "--config",
             str(config),
             "--status",
-            str(self.environment_status_path()),
+            str(self.install_status_path()),
             "--stages",
             "1",
         ]
