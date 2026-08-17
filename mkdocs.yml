@@ -1,0 +1,60 @@
+site_name: BlendJob Docs
+site_author: OmooLab
+site_description: 面向 Blender Add-on 的本地 Job Server 运行时
+
+repo_name: OmooLab/BlendJob
+repo_url: https://github.com/OmooLab/BlendJob
+
+nav:
+  - BlendJob: index.md
+  - API Reference: api.md
+
+theme:
+  name: material
+  language: zh
+  font:
+    text: Open Sans
+    code: Cascadia Code
+  palette:
+    - media: "(prefers-color-scheme)"
+      primary: black
+      toggle:
+        icon: fontawesome/solid/circle-half-stroke
+        name: 跟随系统
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      toggle:
+        icon: fontawesome/regular/moon
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      toggle:
+        icon: fontawesome/solid/moon
+        name: 切换到系统模式
+  features:
+    - header.autohide
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - content.code.copy
+
+extra:
+  version:
+    provider: mike
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.superfences
+
