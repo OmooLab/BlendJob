@@ -67,6 +67,8 @@ class JobClient:
 
     def shutdown(self):
         return self.request("POST", "/shutdown")
+
+
 @dataclass(frozen=True)
 class JobResult:
     """Successful Job value and files returned to a Blender Operator."""
@@ -74,15 +76,13 @@ class JobResult:
     job_id: str
     directory: Path
     value: object
-    status: dict
 
     @classmethod
-    def from_status(cls, status):
+    def _from_status(cls, status):
         return cls(
             job_id=str(status.get("job_id", "")),
             directory=Path(status["directory"]),
             value=status.get("result"),
-            status=dict(status),
         )
 
     def file(self, name):

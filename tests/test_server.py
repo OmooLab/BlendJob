@@ -16,11 +16,11 @@ class ServerTest(unittest.TestCase):
     def wait_for_job(self, context, timeout=2.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            snapshot = context.snapshot()
+            snapshot = context._snapshot()
             if snapshot["state"] in {"succeeded", "failed", "cancelled"}:
                 return snapshot
             time.sleep(0.01)
-        self.fail(f"Job did not finish: {context.snapshot()}")
+        self.fail(f"Job did not finish: {context._snapshot()}")
 
     def test_runs_jobs_in_fifo_order(self):
         server = JobServer("Test", storage_root=self.storage_root)
@@ -81,6 +81,18 @@ class ServerTest(unittest.TestCase):
         self.assertRegex(context.job_id, r"^[0-9a-f]{32}$")
         self.assertEqual(context.directory, self.storage_root / "jobs" / context.job_id)
         self.assertEqual(status["result"], {"value": 42})
+        self.assertEqual(
+            set(status),
+            {
+                "job_id",
+                "job_type",
+                "state",
+                "progress",
+                "message",
+                "directory",
+                "result",
+            },
+        )
         server.close()
 
     def test_resource_lifecycle(self):

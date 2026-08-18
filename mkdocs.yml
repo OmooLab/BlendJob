@@ -7,7 +7,16 @@ repo_name: OmooLab/BlendJob
 repo_url: https://github.com/OmooLab/BlendJob
 
 nav:
-  - BlendJob: index.md
+  - BlendJob:
+      - index.md
+      - 快速开始: getting-started.md
+      - 工作原理: how-it-works.md
+  - 开发指南:
+      - Blender 集成: blender-integration.md
+      - Server 与 Job: server-jobs.md
+      - Environment 与存储: environment.md
+      - Server Resource: resources.md
+      - AI 工作流: ai-workflows.md
   - API Reference: api.md
 
 theme:
@@ -39,7 +48,10 @@ theme:
     - navigation.footer
     - navigation.indexes
     - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
     - content.code.copy
+    - content.code.select
 
 extra:
   version:
@@ -51,11 +63,35 @@ extra_css:
 plugins:
   - search
   - mkdocstrings
+  - i18n:
+      docs_structure: suffix
+      languages:
+        - locale: zh
+          name: 中文
+          default: true
+        - locale: en
+          name: English
+          nav_translations:
+            快速开始: Getting Started
+            工作原理: How It Works
+            开发指南: Guides
+            Blender 集成: Blender Integration
+            Server 与 Job: Server and Jobs
+            Environment 与存储: Environment and Storage
+            Server Resource: Server Resources
+            AI 工作流: AI Workflows
 
 markdown_extensions:
   - admonition
-  - pymdownx.highlight
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.details
-  - pymdownx.superfences
-
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+  - pymdownx.tabbed:
+      alternate_style: true

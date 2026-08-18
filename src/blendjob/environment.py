@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -15,8 +16,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-UV_VERSION = "0.11.3"
+UV_VERSION = "0.11.30"
 ENVIRONMENT_SCHEMA = 1
+INSTALL_PHASES = 3
 BASE_PACKAGES = (
     "fastapi==0.139.2",
     "uvicorn==0.51.0",
@@ -24,20 +26,33 @@ BASE_PACKAGES = (
 UV_ARTIFACTS = {
     "x86_64-pc-windows-msvc": (
         "uv-x86_64-pc-windows-msvc.zip",
-        "ae681c0aaec7cc96af184648cb88d73f8393ed60fa5880abdd6bdb910f9b227c",
+        "be8d78c992312212e5cc05e9f9de3fa996db73b7c86a186dfb9231eb9f91d33e",
     ),
     "aarch64-apple-darwin": (
         "uv-aarch64-apple-darwin.tar.gz",
-        "2bc3d0c7bf2bd08325b1e170abac6f7e5b3346e1d4eab3370d17cefec934996f",
+        "9bed3567d496d8dab84ecf7a1247551ac94ef1baaebb7b65df008dd93e9dc357",
     ),
     "x86_64-unknown-linux-gnu": (
         "uv-x86_64-unknown-linux-gnu.tar.gz",
-        "c0f3236f146e55472663cfbcc9be3042a9f1092275bbe3fe2a56a6cbfd3da5ce",
+        "04bc7d180d6138bf6dc08387acf507a823f397a98fea55da36b0ccc7fbce3b68",
     ),
 }
 UV_SOURCES = (
     f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
-    f"https://mirror.omoolab.xyz/uv/{UV_VERSION}",
+    f"https://cnb.cool/astral-sh/uv/-/releases/download/{UV_VERSION}",
+)
+PYTHON_SOURCES = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download",
+    "https://cnb.cool/astral-sh/python-build-standalone/-/releases/download",
+)
+PYPI_SOURCES = (
+    "https://pypi.org/simple",
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+)
+INDEX_ENVIRONMENT_VARIABLES = (
+    "UV_DEFAULT_INDEX",
+    "UV_INDEX_URL",
+    "UV_INDEX",
 )
 
 
@@ -120,13 +135,13 @@ def uv_target():
     raise RuntimeError(f"Unsupported uv platform: {sys.platform} {machine}")
 
 
-def write_status(path, progress, message, *, stage, stages, error=None):
+def write_status(path, progress, message, *, phase=None, error=None):
+    message = str(message)
+    if phase is not None:
+        message = f"{int(phase)}/{INSTALL_PHASES} {message}"
     payload = {
         "progress": min(max(float(progress), 0.0), 1.0),
-        "message": str(message),
-        "stage": int(stage),
-        "stages": int(stages),
-        "stage_label": "Environment",
+        "message": message,
     }
     if error:
         payload["error"] = str(error)
@@ -145,11 +160,34 @@ def child_environment():
     return environment
 
 
-def _download(url, destination, status, stage, stages, start, end):
+def _format_bytes(value):
+    amount = float(value)
+    units = ("B", "KiB", "MiB", "GiB")
+    unit = units[0]
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            break
+        amount /= 1024.0
+    if unit == "B":
+        return f"{int(amount)} {unit}"
+    return f"{amount:.1f} {unit}"
+
+
+def _download(
+    url,
+    destination,
+    status,
+    phase,
+    start,
+    end,
+    mirror=False,
+    clock=time.monotonic,
+):
     request = urllib.request.Request(url, headers={"User-Agent": "BlendJob"})
     with urllib.request.urlopen(request) as response, destination.open("wb") as output:
         total = int(response.headers.get("Content-Length") or 0)
         received = 0
+        started = clock()
         while True:
             chunk = response.read(256 * 1024)
             if not chunk:
@@ -158,12 +196,13 @@ def _download(url, destination, status, stage, stages, start, end):
             received += len(chunk)
             fraction = received / total if total else 0.5
             progress = start + (end - start) * min(fraction, 1.0)
+            elapsed = max(clock() - started, 0.001)
+            label = "Downloading uv (mirror)" if mirror else "Downloading uv"
             write_status(
                 status,
                 progress,
-                "Installing uv",
-                stage=stage,
-                stages=stages,
+                f"{label} {_format_bytes(received / elapsed)}/s",
+                phase=phase,
             )
 
 
@@ -194,59 +233,70 @@ def _extract_uv(archive, destination):
         destination.chmod(destination.stat().st_mode | 0o111)
 
 
-def install_uv(storage_root, status, stage, stages, start=0.0, end=0.15):
+def install_uv(
+    storage_root,
+    status,
+    phase=1,
+    start=0.01,
+    end=0.20,
+    mirror=False,
+):
     destination = uv_path(storage_root)
     if destination.is_file():
-        write_status(status, end, "uv is ready", stage=stage, stages=stages)
+        write_status(status, end, "Installing uv ...", phase=phase)
         return destination
     target = uv_target()
     filename, checksum = UV_ARTIFACTS[target]
-    errors = []
     destination.parent.mkdir(parents=True, exist_ok=True)
-    for source in UV_SOURCES:
-        descriptor, archive_name = tempfile.mkstemp(suffix=f"-{filename}")
-        os.close(descriptor)
-        archive = Path(archive_name)
-        try:
-            _download(
-                f"{source}/{filename}",
-                archive,
-                status,
-                stage,
-                stages,
-                start,
-                end * 0.8,
-            )
-            _verify(archive, checksum)
-            _extract_uv(archive, destination)
-            write_status(status, end, "uv is ready", stage=stage, stages=stages)
-            return destination
-        except Exception as error:
-            errors.append(f"{source}: {error}")
-        finally:
-            archive.unlink(missing_ok=True)
-    raise RuntimeError("Unable to install uv: " + "; ".join(errors))
-
-
-def run_command(command, environment=None):
-    subprocess.check_call(
-        [str(value) for value in command],
-        env=environment or child_environment(),
+    span = end - start
+    download_start = start + span / 19.0
+    download_end = start + span * 17.0 / 19.0
+    source = UV_SOURCES[1 if mirror else 0]
+    write_status(
+        status,
+        start,
+        "Starting uv download ...",
+        phase=phase,
     )
+    descriptor, archive_name = tempfile.mkstemp(suffix=f"-{filename}")
+    os.close(descriptor)
+    archive = Path(archive_name)
+    try:
+        _download(
+            f"{source}/{filename}",
+            archive,
+            status,
+            phase,
+            download_start,
+            download_end,
+            mirror=mirror,
+        )
+        write_status(
+            status,
+            download_end,
+            "Installing uv ...",
+            phase=phase,
+        )
+        _verify(archive, checksum)
+        write_status(
+            status,
+            end - span / 19.0,
+            "Installing uv ...",
+            phase=phase,
+        )
+        _extract_uv(archive, destination)
+        write_status(status, end, "Installing uv ...", phase=phase)
+        return destination
+    except Exception as error:
+        raise RuntimeError(f"Unable to install uv from {source}: {error}") from error
+    finally:
+        archive.unlink(missing_ok=True)
 
 
-def install_packages(
-    command,
-    status,
-    stage,
-    stages,
-    start=0.22,
-    end=0.98,
-    clock=time.monotonic,
-):
+def _run_output_command(command, on_line, on_tick, environment=None):
     process = subprocess.Popen(
         [str(value) for value in command],
-        env=child_environment(),
+        env=environment if environment is not None else child_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -261,51 +311,190 @@ def install_packages(
         output.put(None)
 
     threading.Thread(target=read_output, daemon=True).start()
-    started = clock()
-    last_line = "Installing packages"
     while True:
         try:
             line = output.get(timeout=0.2)
         except queue.Empty:
-            line = ""
+            on_tick()
+            continue
         if line is None:
             break
-        if line.strip():
-            last_line = line.strip()
-            print(last_line)
-        elapsed = clock() - started
-        fraction = min(elapsed / (elapsed + 30.0), 0.97)
-        write_status(
-            status,
-            start + (end - start) * fraction,
-            last_line,
-            stage=stage,
-            stages=stages,
-        )
+        normalized = line.strip()
+        if normalized:
+            print(normalized)
+            on_line(normalized)
+        on_tick()
     return_code = process.wait()
     if return_code:
         raise subprocess.CalledProcessError(return_code, command)
 
 
-def install(storage_root, environment, status, stages=1):
+def _elapsed_progress(start, end, elapsed, horizon=30.0):
+    factor = min(elapsed / (elapsed + horizon), 0.97)
+    return start + (end - start) * factor
+
+
+def _rate_from_output(line):
+    match = re.search(r"(\d+(?:\.\d+)?\s*[KMGT]?i?B/s)", line, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def install_python_environment(
+    command,
+    status,
+    clock=time.monotonic,
+    environment=None,
+    mirror=False,
+):
+    phase = "checking"
+    phase_started = clock()
+    message = "Checking Python ..."
+    write_status(status, 0.20, message, phase=2)
+
+    def set_phase(value, text):
+        nonlocal phase, phase_started, message
+        if phase != value:
+            phase = value
+            phase_started = clock()
+        message = text
+
+    def on_line(line):
+        lowered = line.lower()
+        if "download" in lowered and ("python" in lowered or "cpython" in lowered):
+            rate = _rate_from_output(line)
+            text = "Downloading Python (mirror)" if mirror else "Downloading Python"
+            if rate:
+                text = f"{text} {rate}"
+            set_phase("downloading", text)
+        elif any(
+            token in lowered
+            for token in ("installing", "using cpython", "creating virtual environment")
+        ):
+            set_phase("installing", "Installing Python ...")
+
+    def on_tick():
+        elapsed = clock() - phase_started
+        ranges = {
+            "checking": (0.20, 0.21),
+            "downloading": (0.21, 0.47),
+            "installing": (0.47, 0.50),
+        }
+        start, end = ranges[phase]
+        write_status(
+            status,
+            _elapsed_progress(start, end, elapsed),
+            message,
+            phase=2,
+        )
+
+    _run_output_command(command, on_line, on_tick, environment=environment)
+    write_status(status, 0.50, "Installing Python ...", phase=2)
+
+
+def install_packages(
+    command,
+    status,
+    clock=time.monotonic,
+    environment=None,
+    mirror=False,
+):
+    phase = "resolving"
+    phase_started = clock()
+    total = 0
+    downloads = set()
+    suffix = " (mirror)" if mirror else ""
+    message = f"Resolving packages{suffix} ..."
+    write_status(status, 0.50, message, phase=3)
+
+    def set_phase(value, text):
+        nonlocal phase, phase_started, message
+        if phase != value:
+            phase = value
+            phase_started = clock()
+        message = text
+
+    def on_line(line):
+        nonlocal total
+        resolved = re.search(r"Resolved\s+(\d+)\s+packages?", line, re.IGNORECASE)
+        if resolved:
+            total = int(resolved.group(1))
+        downloading = re.search(r"Downloading\s+([^\s(]+)", line, re.IGNORECASE)
+        if downloading:
+            downloads.add(downloading.group(1))
+            denominator = max(total, len(downloads))
+            set_phase(
+                "downloading",
+                f"Downloading packages{suffix} {len(downloads)}/{denominator}",
+            )
+        lowered = line.lower()
+        if lowered.startswith(("prepared ", "installed ")):
+            set_phase("installing", "Installing packages ...")
+
+    def on_tick():
+        elapsed = clock() - phase_started
+        if phase == "resolving":
+            progress = _elapsed_progress(0.50, 0.53, elapsed)
+        elif phase == "downloading":
+            if total:
+                progress = 0.53 + 0.41 * min(len(downloads) / total, 1.0)
+            else:
+                progress = _elapsed_progress(0.53, 0.94, elapsed)
+        else:
+            progress = _elapsed_progress(0.94, 0.98, elapsed)
+        write_status(
+            status,
+            progress,
+            message,
+            phase=3,
+        )
+
+    _run_output_command(
+        command,
+        on_line,
+        on_tick,
+        environment=environment,
+    )
+    write_status(status, 0.98, "Installing packages ...", phase=3)
+
+
+def install_environment_variables(mirror=False):
+    environment = child_environment()
+    for name in (*INDEX_ENVIRONMENT_VARIABLES, "UV_PYTHON_INSTALL_MIRROR"):
+        environment.pop(name, None)
+    source = 1 if mirror else 0
+    environment["UV_PYTHON_INSTALL_MIRROR"] = PYTHON_SOURCES[source]
+    environment["UV_INDEX_URL"] = PYPI_SOURCES[source]
+    return environment
+
+
+def install(storage_root, environment, status, source="official"):
+    if source not in {"official", "mirror"}:
+        raise ValueError(f"Unknown install source: {source}")
+    mirror = source == "mirror"
     environment = normalized_environment(environment)
     storage_root = Path(storage_root).resolve()
     storage_root.mkdir(parents=True, exist_ok=True)
     venv = storage_root / ".venv"
     manifest = storage_root / "manifest.json"
     expected_digest = environment_digest(environment)
-    uv = install_uv(storage_root, status, 1, stages)
+    write_status(status, 0.0, "Starting installation ...")
+    uv = install_uv(storage_root, status, mirror=mirror)
     manifest.unlink(missing_ok=True)
-    write_status(status, 0.16, "Creating Python Environment", stage=1, stages=stages)
-    run_command([uv, "venv", "--clear", "--python", environment["python"], venv])
-    write_status(status, 0.22, "Installing packages", stage=1, stages=stages)
+    command_environment = install_environment_variables(mirror)
+    install_python_environment(
+        [uv, "venv", "--clear", "--python", environment["python"], venv],
+        status,
+        environment=command_environment,
+        mirror=mirror,
+    )
     packages = resolved_packages(environment)
     install_packages(
         [uv, "pip", "install", "--python", environment_python(storage_root), *packages],
         status,
-        1,
-        stages,
+        environment=command_environment,
+        mirror=mirror,
     )
+    write_status(status, 0.98, "Verifying installation ...")
     manifest.write_text(
         json.dumps(
             {
@@ -317,7 +506,7 @@ def install(storage_root, environment, status, stages=1):
         ),
         encoding="utf-8",
     )
-    write_status(status, 1.0, "Environment is ready", stage=1, stages=stages)
+    write_status(status, 1.0, "Verifying installation ...")
 
 
 def parse_args():
@@ -325,7 +514,11 @@ def parse_args():
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--status", required=True)
-    parser.add_argument("--stages", type=int, default=1)
+    parser.add_argument(
+        "--source",
+        choices=("official", "mirror"),
+        default="official",
+    )
     return parser.parse_args()
 
 
@@ -333,14 +526,12 @@ def main():
     args = parse_args()
     try:
         environment = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        install(args.storage_root, environment, args.status, args.stages)
+        install(args.storage_root, environment, args.status, source=args.source)
     except Exception as error:
         write_status(
             args.status,
             1.0,
             "Environment installation failed",
-            stage=1,
-            stages=args.stages,
             error=error,
         )
         raise

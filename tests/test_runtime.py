@@ -2,16 +2,83 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import blendjob
 from blendjob.runtime import EnvironmentController, JobRuntime
+from blendjob.operator import JobOperatorBase
 
 
 class EnvironmentControllerTest(unittest.TestCase):
+    def test_install_commands_include_explicit_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "example.py").touch()
+            runtime = JobRuntime(
+                "example.py:server",
+                entrypoint_root=directory,
+                storage_root=directory,
+                environment={"python": "3.12"},
+                namespace="example",
+            )
+
+            official = runtime.install_command()
+            mirror = runtime.install_command(source="mirror")
+
+        self.assertEqual(official[-2:], ["--source", "official"])
+        self.assertEqual(mirror[-2:], ["--source", "mirror"])
+
+    def test_progress_is_monotonic_for_one_job(self):
+        runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
+        job = SimpleNamespace(
+            job_id="job",
+            progress_job_id="job",
+            progress=0.8,
+            runtime=runtime,
+        )
+
+        JobOperatorBase._update_from_job_status(
+            SimpleNamespace(starting_message="Starting task"),
+            None,
+            job,
+            {"job_id": "job", "progress": 0.2, "message": "Working"},
+        )
+
+        self.assertEqual(job.progress, 0.8)
+        runtime.update_ui.assert_called_once_with(None, 0.8, "Working")
+
+    def test_progress_resets_when_post_install_job_changes(self):
+        runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
+        job = SimpleNamespace(
+            job_id="environment",
+            progress_job_id="environment",
+            progress=1.0,
+            runtime=runtime,
+        )
+
+        JobOperatorBase._update_from_job_status(
+            SimpleNamespace(starting_message="Starting task"),
+            None,
+            job,
+            {"job_id": "model", "progress": 0.2, "message": "Downloading model"},
+        )
+
+        self.assertEqual(job.progress_job_id, "model")
+        self.assertEqual(job.progress, 0.2)
+        runtime.update_ui.assert_called_once_with(
+            None,
+            0.2,
+            "Downloading model",
+        )
+
     def test_job_runtime_is_the_public_runtime_class(self):
         self.assertIs(blendjob.JobRuntime, JobRuntime)
         self.assertFalse(hasattr(blendjob, "BlenderJobRuntime"))
+        self.assertEqual(
+            set(blendjob.__all__),
+            {"JobContext", "JobResult", "JobRuntime", "JobServer"},
+        )
+        self.assertFalse(hasattr(blendjob, "JobOperatorState"))
+        self.assertFalse(hasattr(blendjob, "ServerController"))
 
     def test_post_install_failure_is_reported_as_failure(self):
         runtime = SimpleNamespace()
@@ -34,7 +101,7 @@ class EnvironmentControllerTest(unittest.TestCase):
 
         self.assertEqual(status["state"], "failed")
         self.assertEqual(status["error"], "model download failed")
-        self.assertEqual(status["post_install_error"], "model download failed")
+        self.assertNotIn("post_install_error", status)
 
     def test_completed_install_removes_transient_status(self):
         with tempfile.TemporaryDirectory() as directory:

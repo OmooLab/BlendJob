@@ -1,52 +1,25 @@
 # BlendJob
 
-BlendJob 是面向 Blender Add-on 的本地 Job Server 运行时。它把 Blender Operator、独立 Python Environment、HTTP Job Server、FIFO Queue、进度、取消和 Resource 生命周期组合成一套可复用 API。
+[中文文档](https://docs.omoolab.xyz/blendjob/latest/)
 
-BlendJob 适合需要在 Blender 界面之外运行 AI 推理、模型下载、媒体处理或其它重型 Python 任务的 Add-on。Blender 主进程只保留轻量 Client 和 UI 逻辑，业务依赖安装在独立 Environment 中。
+BlendJob is a local Job Server runtime for Blender extensions. It runs long tasks in an isolated Python environment and provides a reusable Blender Operator workflow with progress, cancellation, FIFO scheduling, result delivery, and server lifecycle management.
 
-## 要求
+It is designed for AI inference, model downloads, media processing, geometry computation, and other work that benefits from running outside Blender's main process.
 
-- Python 3.10 或更高版本
-- 支持 Python 3.10+ 的 Blender 版本
-- Windows x64、macOS arm64 或 Linux x64；内建 uv 安装器目前只提供这些平台
+## How it works
 
-## 安装
+A BlendJob feature has three parts:
 
-普通 Python 项目可以使用 pip 或 uv：
+1. A Server Handler defines the Python task.
+2. `JobRuntime` configures the Server entrypoint, environment, and storage.
+3. A Blender Operator inherits `runtime.JobOperatorBase`, submits parameters, and applies the result on Blender's main thread.
 
-```bash
-python -m pip install blendjob
-```
+## Quick example
 
-```bash
-uv add blendjob
-```
-
-默认安装保持零依赖，适合 Blender 主进程。需要在普通 Python 环境中直接创建 FastAPI App 或运行 Runner 时，安装 `server` extra：
-
-```bash
-python -m pip install "blendjob[server]"
-```
-
-Blender Extension 需要把 BlendJob wheel 随扩展分发，并在 `blender_manifest.toml` 中声明：
-
-```toml
-wheels = ["./wheels/blendjob-0.1.8-py3-none-any.whl"]
-```
-
-Runtime 通过随 Extension 分发的同一份 BlendJob wheel 启动独立 Server，不会在独立 Environment 中再次安装 BlendJob。`packages` 只声明 Job 自身的额外依赖；没有额外依赖时可以省略：
+Register a backend task:
 
 ```python
-environment = {
-    "python": "3.10",
-}
-```
-
-## 最小示例
-
-Server package 导出一个 `JobServer`：
-
-```python
+# example_job/server/__init__.py
 from blendjob import JobServer
 
 
@@ -59,9 +32,10 @@ def double(context, parameters):
     return {"value": parameters["value"] * 2}
 ```
 
-Blender 侧创建一个 Runtime，并让业务 Operator 继承绑定后的基类：
+Configure the Blender runtime:
 
 ```python
+# example_job/__init__.py
 from pathlib import Path
 
 from blendjob import JobRuntime
@@ -70,17 +44,76 @@ from blendjob import JobRuntime
 runtime = JobRuntime(
     "server:server",
     entrypoint_root=Path(__file__).parent,
-    storage_root=Path.home() / ".example-addon",
-    environment=environment,
-    namespace="example_addon",
+    storage_root=Path.home() / ".example-job",
+    environment={
+        "python": "3.10",
+        "packages": ["numpy==2.4.2"],
+    },
+    namespace="example_job",
 )
-
-JobOperatorBase = runtime.JobOperatorBase
 ```
 
-完整的 Runtime、Operator、Server Handler、Resource 和存储结构说明见 [开发者指南](https://docs.omoolab.xyz/blendjob/)。
+Define the Blender Operator:
 
-## 开发
+```python
+# example_job/__init__.py (continued)
+import bpy
+
+JobOperatorBase = runtime.JobOperatorBase
+
+
+class DoubleValue(JobOperatorBase, bpy.types.Operator):
+    bl_idname = "example_job.double_value"
+    bl_label = "Double Value"
+    job_type = "double"
+
+    value: bpy.props.IntProperty(default=21)
+
+    def request(self, _context):
+        return {"value": self.value}
+
+    def response(self, _context, result):
+        self.report({"INFO"}, f"Result: {result.value['value']}")
+```
+
+The [Getting Started guide](https://docs.omoolab.xyz/blendjob/latest/en/getting-started/) provides a complete, ready-to-run Blender extension layout with registration and UI code.
+
+## Installation
+
+Install BlendJob in a regular Python project with pip or uv:
+
+```bash
+python -m pip install blendjob
+```
+
+```bash
+uv add blendjob
+```
+
+The default package has no dependencies, which keeps the Blender-side runtime lightweight. Install the `server` extra when creating a FastAPI app or running the server directly in a regular Python environment:
+
+```bash
+python -m pip install "blendjob[server]"
+```
+
+For a Blender extension, bundle the BlendJob wheel in `wheels/` and declare it in `blender_manifest.toml`:
+
+```toml
+wheels = ["./wheels/blendjob-0.1.13-py3-none-any.whl"]
+```
+
+Supported runtime targets are Python 3.10+, Windows x64, macOS arm64, and Linux x64.
+
+## Documentation
+
+- [Getting Started](https://docs.omoolab.xyz/blendjob/latest/en/getting-started/)
+- [How BlendJob Works](https://docs.omoolab.xyz/blendjob/latest/en/how-it-works/)
+- [Blender Integration](https://docs.omoolab.xyz/blendjob/latest/en/blender-integration/)
+- [Server and Jobs](https://docs.omoolab.xyz/blendjob/latest/en/server-jobs/)
+- [AI Workflows](https://docs.omoolab.xyz/blendjob/latest/en/ai-workflows/)
+- [API Reference](https://docs.omoolab.xyz/blendjob/latest/en/api/)
+
+## Development
 
 ```bash
 uv sync
@@ -89,7 +122,7 @@ uv build
 uv run mkdocs build --strict
 ```
 
-版本化文档使用 Mike：
+Versioned documentation uses Mike:
 
 ```bash
 uv run mike deploy --update-aliases 0.1 latest
@@ -98,4 +131,4 @@ uv run mike set-default latest
 
 ## License
 
-BlendJob 使用 [MIT License](https://github.com/OmooLab/BlendJob/blob/main/LICENSE)。
+BlendJob is available under the [MIT License](https://github.com/OmooLab/BlendJob/blob/main/LICENSE).

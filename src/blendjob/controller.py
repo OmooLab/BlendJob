@@ -161,7 +161,7 @@ class ServerController:
                     progress({"job_id": job_id, "directory": directory, **status})
                 state = status.get("state")
                 if state == "succeeded":
-                    result = JobResult.from_status(
+                    result = JobResult._from_status(
                         {"job_id": job_id, "directory": directory, **status}
                     )
                     if response is not None:

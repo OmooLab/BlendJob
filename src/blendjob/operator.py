@@ -19,7 +19,7 @@ class JobOperatorState:
     cancelled: bool = False
     start_error: str = ""
     start_thread: threading.Thread | None = None
-    progress_stage: int | None = None
+    progress_job_id: str = ""
     progress: float = 0.0
 
 
@@ -143,7 +143,7 @@ class JobOperatorBase:
 
         job = runtime.active_job
         if job is None:
-            self.remove_job_timer(context)
+            self._remove_job_timer(context)
             return {"CANCELLED"}
         if job.start_error:
             self.report({"ERROR"}, f"Unable to start task: {job.start_error}")
@@ -157,7 +157,7 @@ class JobOperatorBase:
             status = job.controller.status(job.job_id)
         except RuntimeError as error:
             return self._finish_failure(context, job, error)
-        self.update_from_job_status(context, job, status)
+        self._update_from_job_status(context, job, status)
         state = status.get("state")
         if state == "succeeded":
             return self._finish_success(context, job, status)
@@ -180,7 +180,7 @@ class JobOperatorBase:
             }
             message = self.response(
                 context,
-                JobResult.from_status(complete_status),
+                JobResult._from_status(complete_status),
             )
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             return self._finish_failure(context, job, error)
@@ -196,7 +196,7 @@ class JobOperatorBase:
         return self._close(context, job, "Task failed", cancelled=True)
 
     def _close(self, context, job, message, *, cancelled):
-        self.remove_job_timer(context)
+        self._remove_job_timer(context)
         if hasattr(context.window_manager, "progress_end"):
             context.window_manager.progress_end()
         job.runtime.finish_job(job)
@@ -204,32 +204,19 @@ class JobOperatorBase:
         job.runtime.redraw_ui(context, force=True)
         return {"CANCELLED"} if cancelled else {"FINISHED"}
 
-    def update_from_job_status(self, context, job, status):
+    def _update_from_job_status(self, context, job, status):
         reported = min(max(float(status.get("progress", job.progress)), 0.0), 1.0)
-        stage = status.get("stage")
-        if stage is not None and stage != job.progress_stage:
-            job.progress_stage = stage
+        progress_job_id = str(status.get("job_id") or job.job_id)
+        if progress_job_id != job.progress_job_id:
+            job.progress_job_id = progress_job_id
             job.progress = reported
         else:
             job.progress = max(job.progress, reported)
-        message = self.format_job_status(status, self.starting_message)
+        message = str(status.get("message") or self.starting_message).strip()
         job.runtime.update_ui(context, job.progress, message)
         job.runtime.redraw_ui(context, force=True)
 
-    def format_job_status(self, status, fallback):
-        message = status.get("message")
-        stage = status.get("stage")
-        stages = status.get("stages")
-        stage_label = status.get("stage_label")
-        if stage and stages:
-            prefix = f"{stage}/{stages}"
-            normalized = str(message or "").strip()
-            if normalized and normalized.lower() != str(stage_label or "").lower():
-                return f"{prefix} {normalized}"
-            return f"{prefix} {stage_label}" if stage_label else prefix
-        return str(message or stage_label or fallback).strip()
-
-    def remove_job_timer(self, context):
+    def _remove_job_timer(self, context):
         timer = getattr(self, "_timer", None)
         if timer is None:
             return
@@ -240,7 +227,7 @@ class JobOperatorBase:
         runtime = self._runtime()
         job = runtime.active_job
         runtime.cancel_active()
-        self.remove_job_timer(context)
+        self._remove_job_timer(context)
         if job is None:
             return
         if hasattr(context.window_manager, "progress_end"):

@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled"})
+_NO_RESULT = object()
 
 
 class JobCancelled(RuntimeError):
@@ -29,7 +30,7 @@ class JobContext:
     ):
         self.job_id = job_id
         self.job_type = job_type
-        self.parameters = parameters
+        self._parameters = parameters
         self.storage_root = Path(storage_root)
         self.directory = Path(directory)
         self._resources = resources
@@ -44,14 +45,15 @@ class JobContext:
             "directory": str(self.directory),
         }
 
-    def _update(self, progress, message, error=None, state=None, **details):
-        if state is None:
-            if error:
-                state = "failed"
-            elif progress >= 1.0:
-                state = "succeeded"
-            else:
-                state = "running"
+    def _update(
+        self,
+        progress,
+        message,
+        *,
+        state,
+        error=None,
+        result=_NO_RESULT,
+    ):
         snapshot = {
             "job_id": self.job_id,
             "job_type": self.job_type,
@@ -59,27 +61,26 @@ class JobContext:
             "progress": min(max(float(progress), 0.0), 1.0),
             "message": str(message),
             "directory": str(self.directory),
-            **{key: value for key, value in details.items() if value is not None},
         }
         if error:
             snapshot["error"] = str(error)
+        if result is not _NO_RESULT:
+            snapshot["result"] = result
         with self._lock:
             self._status = snapshot
 
-    def progress(self, progress, message, **details):
+    def progress(self, progress, message):
         """Publish running progress from a Job handler."""
-        self._update(progress, message, state="running", **details)
+        self._update(progress, message, state="running")
 
-    def succeed(self, result=None, message="Task complete"):
-        """Publish a successful terminal result."""
-        details = {"result": result} if result is not None else {}
-        self._update(1.0, message, state="succeeded", **details)
+    def _succeed(self, result=None, message="Task complete"):
+        self._update(1.0, message, state="succeeded", result=result)
 
-    def snapshot(self):
+    def _snapshot(self):
         with self._lock:
             return dict(self._status)
 
-    def request_cancel(self):
+    def _request_cancel(self):
         with self._lock:
             if self._status["state"] in TERMINAL_STATES:
                 return False
@@ -91,12 +92,12 @@ class JobContext:
             }
             return True
 
-    def is_cancelled(self):
+    def _is_cancelled(self):
         with self._lock:
             return self._cancel_requested
 
     def check_cancelled(self):
-        if self.is_cancelled():
+        if self._is_cancelled():
             raise JobCancelled("Task cancelled")
 
     def resource(self, name):
@@ -238,7 +239,7 @@ class JobServer:
                 "server": self.name,
                 "instance_id": instance_id,
                 "busy": active is not None or queued_jobs > 0,
-                "active_job": active.snapshot() if active else None,
+                "active_job": active._snapshot() if active else None,
                 "queued_jobs": queued_jobs,
                 "started_at": self.started_at,
                 "resources": self.resource_snapshots(),
@@ -274,7 +275,7 @@ class JobServer:
             )
             self.jobs[job_id] = context
             self._prune_jobs()
-            self.futures[job_id] = self.executor.submit(self.run, context)
+            self.futures[job_id] = self.executor.submit(self._run, context)
         return context
 
     def cancel(self, job_id):
@@ -284,15 +285,15 @@ class JobServer:
             if context is None:
                 return None
             if future is not None and future.cancel():
-                context.request_cancel()
+                context._request_cancel()
                 context._update(1.0, "Task cancelled", state="cancelled")
                 self.futures.pop(job_id, None)
                 return context
-        return context if context.request_cancel() else None
+        return context if context._request_cancel() else None
 
     def _queued_job_count(self):
         return sum(
-            context.snapshot()["state"] == "queued"
+            context._snapshot()["state"] == "queued"
             for context in self.jobs.values()
         )
 
@@ -301,15 +302,15 @@ class JobServer:
             identifier
             for identifier, context in self.jobs.items()
             if identifier != self.active_job_id
-            and context.snapshot()["state"] in TERMINAL_STATES
+            and context._snapshot()["state"] in TERMINAL_STATES
         ]
         excess = len(completed) - self.max_job_history
         for identifier in completed[:max(excess, 0)]:
             self.jobs.pop(identifier, None)
 
-    def run(self, context):
+    def _run(self, context):
         with self.lock:
-            if context.snapshot()["state"] in TERMINAL_STATES:
+            if context._snapshot()["state"] in TERMINAL_STATES:
                 return
             self.active_job_id = context.job_id
         context._update(0.0, "Server accepted the task", state="running")
@@ -317,12 +318,12 @@ class JobServer:
             context.check_cancelled()
             result = self.handlers[context.job_type](
                 context,
-                context.parameters,
+                context._parameters,
             )
             context.check_cancelled()
-            snapshot = context.snapshot()
+            snapshot = context._snapshot()
             if snapshot["state"] not in {"failed", "cancelled"}:
-                context.succeed(
+                context._succeed(
                     result,
                     message=snapshot.get("message") or "Task complete",
                 )
@@ -392,7 +393,7 @@ class JobServer:
 
         @app.post("/jobs", status_code=202)
         def submit_job(payload: dict):
-            job_type = str(payload.get("job_type", payload.get("command", "")))
+            job_type = str(payload.get("job_type", ""))
             parameters = payload.get("parameters")
             if not job_type or not isinstance(parameters, dict):
                 raise HTTPException(status_code=422, detail="Invalid job request")
@@ -402,21 +403,21 @@ class JobServer:
                 raise HTTPException(status_code=422, detail="Unknown job type")
             except ValueError as error:
                 raise HTTPException(status_code=409, detail=str(error))
-            return context.snapshot()
+            return context._snapshot()
 
         @app.get("/jobs/{job_id}")
         def job_status(job_id: str):
             context = self.jobs.get(job_id)
             if context is None:
                 raise HTTPException(status_code=404, detail="Job was not found")
-            return context.snapshot()
+            return context._snapshot()
 
         @app.delete("/jobs/{job_id}", status_code=202)
         def cancel_job(job_id: str):
             context = self.cancel(job_id)
             if context is None:
                 raise HTTPException(status_code=404, detail="Active job was not found")
-            return context.snapshot()
+            return context._snapshot()
 
         @app.post("/shutdown", status_code=202)
         def shutdown():

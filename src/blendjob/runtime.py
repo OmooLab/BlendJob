@@ -23,11 +23,13 @@ class EnvironmentController:
         self.post_error = ""
         self.cancelled = False
         self._post_job_id = ""
-        self._post_stage = 1
         self._lock = threading.Lock()
 
-    def submit(self, _job_type, _parameters):
+    def submit(self, _job_type, parameters):
         runtime = self.runtime
+        source = str(parameters.get("source", "official"))
+        if source not in {"official", "mirror"}:
+            raise ValueError(f"Unknown install source: {source}")
         runtime.storage_root()
         runtime.install_status_path().unlink(missing_ok=True)
         self.post_thread = None
@@ -35,7 +37,6 @@ class EnvironmentController:
         self.post_error = ""
         self.cancelled = False
         self._post_job_id = ""
-        self._post_stage = 1
         self.log_file = runtime.install_log_path().open(
             "w", encoding="utf-8"
         )
@@ -43,7 +44,7 @@ class EnvironmentController:
         environment["PYTHONIOENCODING"] = "utf-8:backslashreplace"
         environment["PYTHONUTF8"] = "1"
         self.process = subprocess.Popen(
-            runtime.install_command(),
+            runtime.install_command(source=source),
             stdout=self.log_file,
             stderr=subprocess.STDOUT,
             cwd=runtime.storage_root(),
@@ -88,8 +89,7 @@ class EnvironmentController:
                     "message",
                     "Running post-install setup",
                 ),
-                "stage": post_status.get("stage", 2),
-                "stage_label": post_status.get("stage_label", "Post Install"),
+                "job_id": post_status.get("job_id", ""),
                 "state": "running",
             }
         return self._success_status()
@@ -129,13 +129,12 @@ class EnvironmentController:
     def _update_post_progress(self, status):
         job_id = str(status.get("job_id", ""))
         with self._lock:
-            if job_id and job_id != self._post_job_id:
+            if job_id:
                 self._post_job_id = job_id
-                self._post_stage += 1
             self.post_status = {
-                **status,
-                "stage": self._post_stage,
-                "stage_label": str(status.get("job_type", "Post Install")),
+                "job_id": job_id,
+                "progress": status.get("progress", 0.0),
+                "message": status.get("message", "Running post-install setup"),
             }
 
     def _success_status(self):
@@ -151,7 +150,6 @@ class EnvironmentController:
                 "message": f"Environment is ready; post-install failed: {self.post_error}",
                 "state": "failed",
                 "error": self.post_error,
-                "post_install_error": self.post_error,
             }
         return {
             "progress": 1.0,
@@ -273,7 +271,7 @@ class JobRuntime:
         )
         return path
 
-    def install_command(self):
+    def install_command(self, source="official"):
         installer = Path(__file__).with_name("installer") / "environment.py"
         config = self.write_environment_config()
         return [
@@ -285,8 +283,8 @@ class JobRuntime:
             str(config),
             "--status",
             str(self.install_status_path()),
-            "--stages",
-            "1",
+            "--source",
+            source,
         ]
 
     def request(self, job_type, parameters, response=None):
@@ -325,14 +323,31 @@ class JobRuntime:
             bl_idname = f"{runtime.namespace}.install_environment"
             bl_label = "Install Environment"
             job_type = "install-environment"
-            starting_message = "Starting Environment installation"
+            starting_message = "Starting installation ..."
 
             def request(self, _context):
                 if not bpy.app.online_access:
                     raise RuntimeError(
                         "Online Access is disabled in Blender Preferences"
                     )
-                return {}
+                return {"source": "official"}
+
+            def controller(self, _runtime):
+                runtime.server.stop()
+                return runtime._environment_controller
+
+        class InstallEnvironmentMirror(operator_base, bpy.types.Operator):
+            bl_idname = f"{runtime.namespace}.install_environment_mirror"
+            bl_label = "Install Environment (Mirror)"
+            job_type = "install-environment"
+            starting_message = "Starting installation ..."
+
+            def request(self, _context):
+                if not bpy.app.online_access:
+                    raise RuntimeError(
+                        "Online Access is disabled in Blender Preferences"
+                    )
+                return {"source": "mirror"}
 
             def controller(self, _runtime):
                 runtime.server.stop()
@@ -398,6 +413,7 @@ class JobRuntime:
 
         self._operator_classes = (
             InstallEnvironment,
+            InstallEnvironmentMirror,
             CancelJob,
             StartServer,
             StopServer,

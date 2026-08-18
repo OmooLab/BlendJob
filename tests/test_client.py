@@ -11,13 +11,14 @@ class JobResultTest(unittest.TestCase):
             root = Path(directory)
             output = root / "result.txt"
             output.write_text("done", encoding="utf-8")
-            result = JobResult("job", root, {"output": output.name}, {})
+            result = JobResult("job", root, {"output": output.name})
             self.assertEqual(result.file("output"), output)
+            self.assertFalse(hasattr(result, "status"))
 
     def test_rejects_file_outside_job_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            result = JobResult("job", root, {"output": "../escape.txt"}, {})
+            result = JobResult("job", root, {"output": "../escape.txt"})
             with self.assertRaisesRegex(RuntimeError, "escapes"):
                 result.file("output")
 
