@@ -5,11 +5,16 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled"})
 _NO_RESULT = object()
+
+
+def _timestamp():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 class JobCancelled(RuntimeError):
@@ -33,8 +38,10 @@ class JobContext:
         self._parameters = parameters
         self.storage_root = Path(storage_root)
         self.directory = Path(directory)
+        self.log_path = self.directory / "job.log"
         self._resources = resources
         self._lock = threading.Lock()
+        self._log_lock = threading.Lock()
         self._cancel_requested = False
         self._status = {
             "job_id": job_id,
@@ -72,6 +79,17 @@ class JobContext:
     def progress(self, progress, message):
         """Publish running progress from a Job handler."""
         self._update(progress, message, state="running")
+
+    def log(self, message, *, level="INFO"):
+        """Append one Handler detail to this Job's own log file."""
+        line = f"{_timestamp()} [{str(level).upper()}] {str(message).rstrip()}\n"
+        try:
+            with self._log_lock:
+                with self.log_path.open("a", encoding="utf-8") as stream:
+                    stream.write(line)
+        except OSError:
+            return False
+        return True
 
     def _succeed(self, result=None, message="Task complete"):
         self._update(1.0, message, state="succeeded", result=result)
@@ -275,6 +293,8 @@ class JobServer:
             )
             self.jobs[job_id] = context
             self._prune_jobs()
+            context.log(f"Queued {job_type}")
+            self._log_job(context, "queued")
             self.futures[job_id] = self.executor.submit(self._run, context)
         return context
 
@@ -286,10 +306,16 @@ class JobServer:
                 return None
             if future is not None and future.cancel():
                 context._request_cancel()
-                context._update(1.0, "Task cancelled", state="cancelled")
                 self.futures.pop(job_id, None)
+                context.log("Cancelled before execution", level="WARNING")
+                self._log_job(context, "cancelled before execution")
+                context._update(1.0, "Task cancelled", state="cancelled")
                 return context
-        return context if context._request_cancel() else None
+        if not context._request_cancel():
+            return None
+        context.log("Cancellation requested", level="WARNING")
+        self._log_job(context, "cancellation requested")
+        return context
 
     def _queued_job_count(self):
         return sum(
@@ -314,6 +340,8 @@ class JobServer:
                 return
             self.active_job_id = context.job_id
         context._update(0.0, "Server accepted the task", state="running")
+        context.log("Started")
+        self._log_job(context, "started")
         try:
             context.check_cancelled()
             result = self.handlers[context.job_type](
@@ -323,20 +351,44 @@ class JobServer:
             context.check_cancelled()
             snapshot = context._snapshot()
             if snapshot["state"] not in {"failed", "cancelled"}:
+                context.log("Succeeded")
+                self._log_job(context, "succeeded")
                 context._succeed(
                     result,
                     message=snapshot.get("message") or "Task complete",
                 )
         except JobCancelled:
+            context.log("Cancelled", level="WARNING")
+            self._log_job(context, "cancelled")
             context._update(1.0, "Task cancelled", state="cancelled")
         except Exception as error:
-            traceback.print_exc()
+            context.log(
+                (
+                    f"{type(error).__name__}: {error}\n"
+                    f"{traceback.format_exc().rstrip()}"
+                ),
+                level="ERROR",
+            )
+            self._log_job(
+                context,
+                f"failed: {type(error).__name__}: {error}",
+            )
             context._update(1.0, "Task failed", error=error, state="failed")
         finally:
             with self.lock:
                 if self.active_job_id == context.job_id:
                     self.active_job_id = None
                 self.futures.pop(context.job_id, None)
+
+    def _log_job(self, context, message):
+        line = (
+            f"{_timestamp()} [job {context.job_id}] "
+            f"[{context.job_type}] {message}"
+        )
+        try:
+            print(line, flush=True)
+        except OSError:
+            pass
 
     def create_app(self, instance_id, storage_root=None):
         from fastapi import FastAPI, HTTPException

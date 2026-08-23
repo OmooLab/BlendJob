@@ -43,6 +43,7 @@ Handler 常用的上下文成员如下：
 | `progress(value, message)` | 发布 0.0–1.0 进度与显示文本 |
 | `check_cancelled()` | 在安全检查点响应取消 |
 | `resource(name)` | 取得 Server Resource |
+| `log(message, level="INFO")` | 把 Handler 细节写入当前 Job 的 `job.log` |
 
 BlendJob 根据 Handler 的执行结果维护 `queued`、`running`、`cancelling`、`succeeded`、`failed` 和 `cancelled` 状态。
 
@@ -108,4 +109,4 @@ Job Server 使用单 Worker FIFO Queue。提交会立即返回 Job ID 和目录�
 
 ## 失败与日志
 
-Handler 抛出的异常会把 Job 标记为失败，并把错误信息返回 Runtime。完整 traceback 写入 `server.log`，可通过 `<namespace>.open_server_log` Operator 打开。
+Handler 抛出的异常会把 Job 标记为失败，并把简洁错误信息返回 Runtime。每个 `jobs/<job-id>/job.log` 保存该任务的生命周期、`context.log()` 细节与完整 traceback。`server.log` 只保留带时间、Job ID 与 Job Type 的排队、开始、成功、取消和失败主线，以及 Server 进程自身的输出。

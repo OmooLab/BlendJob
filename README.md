@@ -99,7 +99,7 @@ python -m pip install "blendjob[server]"
 For a Blender extension, bundle the BlendJob wheel in `wheels/` and declare it in `blender_manifest.toml`:
 
 ```toml
-wheels = ["./wheels/blendjob-0.1.13-py3-none-any.whl"]
+wheels = ["./wheels/blendjob-0.1.14-py3-none-any.whl"]
 ```
 
 Supported runtime targets are Python 3.10+, Windows x64, macOS arm64, and Linux x64.

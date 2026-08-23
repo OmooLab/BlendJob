@@ -11,7 +11,7 @@ example_job/
 ├── server/
 │   └── __init__.py
 └── wheels/
-    └── blendjob-0.1.13-py3-none-any.whl
+    └── blendjob-0.1.14-py3-none-any.whl
 ```
 
 Modules under `server/` run in the dedicated process, while Blender loads the root `__init__.py`. To make the complete call flow easy to follow, this guide keeps all Blender-side code in `__init__.py`; a larger project can split it into focused modules later.
@@ -23,7 +23,7 @@ Copy the BlendJob wheel into `wheels/` and declare it in `blender_manifest.toml`
 The snippet below shows only the field added for BlendJob. Keep the extension's existing name, version, Blender version, license, and other manifest fields.
 
 ```toml
-wheels = ["./wheels/blendjob-0.1.13-py3-none-any.whl"]
+wheels = ["./wheels/blendjob-0.1.14-py3-none-any.whl"]
 ```
 
 Blender can now import `blendjob` when it enables the extension.

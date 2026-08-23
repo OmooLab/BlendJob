@@ -59,6 +59,7 @@ BlendJob 使用以下目录：
 ├── install.log
 ├── install-status.json
 ├── jobs/
+│   └── <job-id>/job.log
 ├── manifest.json
 ├── server.log
 └── tools/
@@ -67,15 +68,15 @@ BlendJob 使用以下目录：
 - `.venv/`：Server 的独立 Python Environment
 - `environment.json`：本次期望安装的声明
 - `manifest.json`：已安装 Environment 的版本与 Hash
-- `jobs/<job-id>/`：每个 Job 的工作与输出目录
+- `jobs/<job-id>/`：每个 Job 的工作与输出目录；`job.log` 保存任务细节与完整 traceback
 - `install.log`：Environment 安装输出
-- `server.log`：Server 与 Handler 输出
+- `server.log`：带 Job ID 的任务生命周期主线与 Server 自身输出
 - `tools/`：BlendJob 管理的 uv
 
 `install-status.json` 在安装期间用于 UI 状态，安装任务收尾后会清理。项目可以在同一根目录下增加 `models/`、`cache/` 等领域目录。
 
 ## 日志与恢复
 
-安装失败时查看 `install.log`，Server 启动或 Handler 失败时查看 `server.log`。Runtime 提供 `open_server_log` Operator，项目也可以在自己的设置面板中显示这些路径。
+安装失败时查看 `install.log`。Server 启动失败或进程自身异常查看 `server.log`；具体任务失败则先根据其中的 Job ID 打开对应 `jobs/<job-id>/job.log`。Runtime 提供 `open_server_log` Operator，项目也可以在自己的设置面板中显示这些路径。
 
 Environment 目录是可重新构建的数据。模型、用户下载与其它需要长期保留的内容放在 `.venv/` 之外。

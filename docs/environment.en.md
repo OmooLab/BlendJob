@@ -59,6 +59,7 @@ BlendJob uses this layout:
 ├── install.log
 ├── install-status.json
 ├── jobs/
+│   └── <job-id>/job.log
 ├── manifest.json
 ├── server.log
 └── tools/
@@ -67,15 +68,15 @@ BlendJob uses this layout:
 - `.venv/`: isolated Python environment for the Server
 - `environment.json`: requested installation declaration
 - `manifest.json`: installed environment version and hash
-- `jobs/<job-id>/`: work and output directory for each job
+- `jobs/<job-id>/`: work and output directory for each job; `job.log` stores task details and the complete traceback
 - `install.log`: environment installation output
-- `server.log`: Server and Handler output
+- `server.log`: Job lifecycle mainline with Job IDs and output from the Server itself
 - `tools/`: uv managed by BlendJob
 
 `install-status.json` carries UI state during installation and is removed when the install task closes. Your project can add domain directories such as `models/` and `cache/` under the same root.
 
 ## Logs and recovery
 
-Read `install.log` after an environment installation failure and `server.log` after a startup or Handler failure. The Runtime provides an `open_server_log` Operator, and your settings panel can also display these paths.
+Read `install.log` after an environment installation failure. Use `server.log` for Server startup or process errors; for a failed task, use its Job ID from the mainline to open `jobs/<job-id>/job.log`. The Runtime provides an `open_server_log` Operator, and your settings panel can also display these paths.
 
 The environment directory is rebuildable data. Store models, user downloads, and other durable content outside `.venv/`.

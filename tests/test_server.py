@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from blendjob import JobServer
 
@@ -93,6 +94,41 @@ class ServerTest(unittest.TestCase):
                 "result",
             },
         )
+        job_log = (context.directory / "job.log").read_text(encoding="utf-8")
+        self.assertIn("Queued example", job_log)
+        self.assertIn("Started", job_log)
+        self.assertIn("Succeeded", job_log)
+        server.close()
+
+    def test_handler_details_and_traceback_stay_in_job_log(self):
+        server = JobServer("Test", storage_root=self.storage_root)
+
+        @server.job("broken")
+        def broken(context, _parameters):
+            context.log("Loading detailed input")
+            raise ValueError("broken input")
+
+        with patch("builtins.print") as server_output:
+            context = server.submit("broken", {}, job_id="broken-job")
+            status = self.wait_for_job(context)
+
+        self.assertEqual(status["state"], "failed")
+        job_log = (context.directory / "job.log").read_text(encoding="utf-8")
+        self.assertIn("Loading detailed input", job_log)
+        self.assertIn("Traceback (most recent call last)", job_log)
+        self.assertIn("ValueError: broken input", job_log)
+        mainline = "\n".join(
+            str(call.args[0])
+            for call in server_output.call_args_list
+            if call.args
+        )
+        self.assertIn("[job broken-job] [broken] queued", mainline)
+        self.assertIn("[job broken-job] [broken] started", mainline)
+        self.assertIn(
+            "[job broken-job] [broken] failed: ValueError: broken input",
+            mainline,
+        )
+        self.assertNotIn("Traceback (most recent call last)", mainline)
         server.close()
 
     def test_resource_lifecycle(self):

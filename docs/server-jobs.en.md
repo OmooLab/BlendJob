@@ -43,6 +43,7 @@ Handlers commonly use these context members:
 | `progress(value, message)` | Publish progress from 0.0 to 1.0 with display text |
 | `check_cancelled()` | Respond to cancellation at a safe checkpoint |
 | `resource(name)` | Get a Server Resource |
+| `log(message, level="INFO")` | Write Handler details to the current Job's `job.log` |
 
 BlendJob maintains the `queued`, `running`, `cancelling`, `succeeded`, `failed`, and `cancelled` states from Handler execution.
 
@@ -108,4 +109,4 @@ One Runtime manages one active interactive Operator invocation at a time. The Se
 
 ## Failures and logs
 
-An exception from a Handler marks the job as failed and returns its error message to the Runtime. The complete traceback is written to `server.log`, which the `<namespace>.open_server_log` Operator opens.
+An exception from a Handler marks the job as failed and returns its error message to the Runtime. Each `jobs/<job-id>/job.log` stores that Job's lifecycle, `context.log()` details, and complete traceback. `server.log` keeps only the timestamped queue, start, success, cancellation, and failure mainline with Job ID and Job Type, plus output from the Server process itself.

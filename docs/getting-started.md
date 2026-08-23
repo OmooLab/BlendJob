@@ -11,7 +11,7 @@ example_job/
 ├── server/
 │   └── __init__.py
 └── wheels/
-    └── blendjob-0.1.13-py3-none-any.whl
+    └── blendjob-0.1.14-py3-none-any.whl
 ```
 
 `server/` 中的模块运行在独立进程，根目录的 `__init__.py` 由 Blender 加载。为了突出完整调用流程，本章先把 Blender 侧代码集中写在 `__init__.py` 中；实际项目可以再按职责拆分模块。
@@ -23,7 +23,7 @@ example_job/
 下面只列出 BlendJob 需要新增的字段；Manifest 仍需保留 Extension 原有的名称、版本、Blender 版本和许可证等配置。
 
 ```toml
-wheels = ["./wheels/blendjob-0.1.13-py3-none-any.whl"]
+wheels = ["./wheels/blendjob-0.1.14-py3-none-any.whl"]
 ```
 
 这样 Blender 启用 Extension 时就可以导入 `blendjob`。
