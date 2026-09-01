@@ -382,8 +382,7 @@ class JobRuntime:
             bl_label = "Stop Server"
 
             def execute(self, _context):
-                runtime.server.stop()
-                runtime.redraw_ui()
+                runtime.stop()
                 return {"FINISHED"}
 
         class RestartServer(bpy.types.Operator):
@@ -474,6 +473,14 @@ class JobRuntime:
         job = self.active_job
         if job is not None:
             self.finish_job(job)
+
+    def stop(self):
+        self.cancel_active()
+        try:
+            self.server.stop()
+        finally:
+            self.close_active()
+            self.redraw_ui()
 
     def update_ui(self, context, progress, message):
         self.progress = min(max(float(progress), 0.0), 1.0)

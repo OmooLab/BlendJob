@@ -113,6 +113,8 @@ With `namespace="my_addon"`, the Runtime registers these built-in Operators:
 | Restart the Server | `my_addon.restart_server` |
 | Open the Server log | `my_addon.open_server_log` |
 
+Stop Server first cancels the active job, waits for the Server to stop, then runs the application Operator's `cleanup()` and clears the Runtime state. The original modal Operator returns `CANCELLED` on its next timer event. Cancel Job only cancels the active job and leaves the Server running.
+
 ## Make a direct synchronous request
 
 Scripts, background threads, and `post_install` can use the synchronous API:

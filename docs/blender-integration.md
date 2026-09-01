@@ -113,6 +113,8 @@ Runtime 注册以下内建 Operator，`namespace="my_addon"` 时对应：
 | 重启 Server | `my_addon.restart_server` |
 | 打开 Server 日志 | `my_addon.open_server_log` |
 
+Stop Server 会先取消活动 Job，再等待 Server 停止，最后执行业务 Operator 的 `cleanup()` 并清除 Runtime 活动状态。原 Modal Operator 在下一次 Timer 事件中以 `CANCELLED` 结束。Cancel Job 只取消活动 Job，Server 保持运行。
+
 ## 直接发起同步 Request
 
 脚本、后台线程或 `post_install` 可以使用同步 API：

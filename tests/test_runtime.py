@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import blendjob
 from blendjob.runtime import EnvironmentController, JobRuntime
-from blendjob.operator import JobOperatorBase
+from blendjob.operator import JobOperatorBase, JobOperatorState
 
 
 class EnvironmentControllerTest(unittest.TestCase):
@@ -129,6 +130,152 @@ class EnvironmentControllerTest(unittest.TestCase):
         self.assertEqual(command[3], "--entrypoint")
         self.assertNotIn("blendjob.runner", command)
         self.assertIn("addon/server/__init__.py:server", command)
+
+
+class JobRuntimeStopTest(unittest.TestCase):
+    def runtime(self, server):
+        runtime = JobRuntime.__new__(JobRuntime)
+        runtime.active_job = None
+        runtime.server = server
+        runtime.redraw_ui = Mock()
+        return runtime
+
+    def job(self, events, controller=None):
+        controller = controller or SimpleNamespace(
+            cancel=lambda _job_id: events.append("cancel"),
+            mark_job_complete=lambda _job_id: events.append("mark"),
+        )
+        operator = SimpleNamespace(
+            cleanup=lambda: events.append("cleanup"),
+        )
+        return JobOperatorState(
+            runtime=None,
+            operator=operator,
+            controller=controller,
+            job_id="job",
+            started=True,
+        )
+
+    def test_stop_cancels_active_job_before_server_and_cleans_up_after(self):
+        events = []
+
+        def stop_server():
+            events.append("stop")
+            server.auto_start = False
+
+        server = SimpleNamespace(auto_start=True, stop=stop_server)
+        runtime = self.runtime(server)
+        job = self.job(events)
+        job.runtime = runtime
+        runtime.active_job = job
+
+        runtime.stop()
+
+        self.assertEqual(events, ["cancel", "stop", "mark", "cleanup"])
+        self.assertTrue(job.cancelled)
+        self.assertIsNone(runtime.active_job)
+        self.assertFalse(server.auto_start)
+        runtime.redraw_ui.assert_called_once_with()
+
+    def test_stop_idle_server_without_job_cleanup(self):
+        events = []
+
+        def stop_server():
+            events.append("stop")
+            server.auto_start = False
+
+        server = SimpleNamespace(auto_start=True, stop=stop_server)
+        runtime = self.runtime(server)
+
+        runtime.stop()
+
+        self.assertEqual(events, ["stop"])
+        self.assertFalse(server.auto_start)
+        runtime.redraw_ui.assert_called_once_with()
+
+    def test_stop_failure_still_closes_active_job_and_redraws(self):
+        events = []
+
+        def stop_server():
+            events.append("stop")
+            raise RuntimeError("stop failed")
+
+        runtime = self.runtime(SimpleNamespace(stop=stop_server))
+        job = self.job(events)
+        job.runtime = runtime
+        runtime.active_job = job
+
+        with self.assertRaisesRegex(RuntimeError, "stop failed"):
+            runtime.stop()
+
+        self.assertEqual(events, ["cancel", "stop", "mark", "cleanup"])
+        self.assertIsNone(runtime.active_job)
+        runtime.redraw_ui.assert_called_once_with()
+
+    def test_stop_cancels_job_while_submission_is_in_flight(self):
+        events = []
+        submit_started = threading.Event()
+        release_submit = threading.Event()
+
+        def submit(_job_type, _parameters):
+            submit_started.set()
+            release_submit.wait(1.0)
+            return {"job_id": "job", "directory": "."}
+
+        controller = SimpleNamespace(
+            submit=submit,
+            cancel=lambda _job_id: events.append("cancel"),
+            mark_job_complete=lambda _job_id: events.append("mark"),
+        )
+        job = JobOperatorState(
+            runtime=None,
+            operator=SimpleNamespace(
+                job_type="example",
+                cleanup=lambda: events.append("cleanup"),
+            ),
+            controller=controller,
+        )
+        submit_thread = threading.Thread(
+            target=JobOperatorBase._submit_job,
+            args=(job.operator, job, {}),
+        )
+
+        def stop_server():
+            events.append("stop-start")
+            release_submit.set()
+            submit_thread.join(1.0)
+            events.append("stop-end")
+
+        runtime = self.runtime(SimpleNamespace(stop=stop_server))
+        job.runtime = runtime
+        runtime.active_job = job
+        submit_thread.start()
+        self.assertTrue(submit_started.wait(1.0))
+
+        runtime.stop()
+
+        self.assertEqual(
+            events,
+            ["stop-start", "cancel", "stop-end", "mark", "cleanup"],
+        )
+        self.assertTrue(job.cancelled)
+        self.assertIsNone(runtime.active_job)
+
+    def test_modal_after_stop_cancels_without_duplicate_cleanup(self):
+        cleanup = Mock()
+        runtime = SimpleNamespace(active_job=None)
+        operator = JobOperatorBase()
+        operator.job_runtime = runtime
+        operator.cleanup = cleanup
+        operator._timer = object()
+        window_manager = SimpleNamespace(event_timer_remove=Mock())
+        context = SimpleNamespace(window_manager=window_manager)
+
+        result = operator.modal(context, SimpleNamespace(type="TIMER"))
+
+        self.assertEqual(result, {"CANCELLED"})
+        cleanup.assert_not_called()
+        window_manager.event_timer_remove.assert_called_once()
 
 
 if __name__ == "__main__":
