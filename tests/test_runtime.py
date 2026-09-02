@@ -1,8 +1,9 @@
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 import blendjob
@@ -276,6 +277,122 @@ class JobRuntimeStopTest(unittest.TestCase):
         self.assertEqual(result, {"CANCELLED"})
         cleanup.assert_not_called()
         window_manager.event_timer_remove.assert_called_once()
+
+
+class JobRuntimeStatusBarTest(unittest.TestCase):
+    @staticmethod
+    def original_draw(_owner, _context):
+        pass
+
+    def setUp(self):
+        class StatusBarHeader:
+            draw = self.original_draw
+
+            @classmethod
+            def append(cls, draw):
+                draw_funcs = getattr(cls.draw, "_draw_funcs", None)
+                if draw_funcs is None:
+                    original_draw = cls.draw
+
+                    def draw_all(owner, context):
+                        for draw_func in draw_all._draw_funcs:
+                            draw_func(owner, context)
+
+                    draw_funcs = draw_all._draw_funcs = [original_draw]
+                    cls.draw = draw_all
+                draw._owner = "example"
+                draw_funcs.append(draw)
+
+            @classmethod
+            def remove(cls, draw):
+                draw_funcs = getattr(cls.draw, "_draw_funcs", ())
+                if draw in draw_funcs:
+                    draw_funcs.remove(draw)
+
+        class Timers:
+            callbacks = []
+
+            @classmethod
+            def is_registered(cls, callback):
+                return callback in cls.callbacks
+
+            @classmethod
+            def register(cls, callback, **_options):
+                cls.callbacks.append(callback)
+
+            @classmethod
+            def unregister(cls, callback):
+                cls.callbacks.remove(callback)
+
+        fake_bpy = ModuleType("bpy")
+        fake_bpy.types = SimpleNamespace(
+            Operator=object,
+            STATUSBAR_HT_header=StatusBarHeader,
+        )
+        fake_bpy.utils = SimpleNamespace(
+            register_class=Mock(),
+            unregister_class=Mock(),
+        )
+        fake_bpy.app = SimpleNamespace(
+            online_access=True,
+            timers=Timers,
+        )
+        fake_bpy.context = SimpleNamespace(
+            window_manager=SimpleNamespace(windows=()),
+            workspace=None,
+        )
+        self.status_bar = StatusBarHeader
+        self.timers = Timers
+        self.bpy_patch = patch.dict(sys.modules, {"bpy": fake_bpy})
+        self.bpy_patch.start()
+        self.addCleanup(self.bpy_patch.stop)
+        self.runtime = JobRuntime(
+            "test_runtime.py:server",
+            entrypoint_root=Path(__file__).parent,
+            storage_root=Path(self.id()),
+            environment={"python": "3.12"},
+            namespace="example",
+        )
+        self.runtime.environment_ready = Mock(return_value=False)
+        self.runtime.server.poll = Mock(return_value=1.0)
+        self.runtime.redraw_ui = Mock()
+
+    def callbacks(self):
+        return getattr(self.status_bar.draw, "_draw_funcs", ())
+
+    def test_poll_restores_status_bar_after_blender_rebuilds_header(self):
+        self.runtime.register()
+        self.assertIn(self.runtime._status_bar_draw, self.callbacks())
+
+        self.status_bar.draw = self.original_draw
+        self.assertEqual(self.callbacks(), ())
+
+        interval = self.runtime._poll_server()
+
+        self.assertEqual(interval, 1.0)
+        self.assertIn(self.runtime._status_bar_draw, self.callbacks())
+        self.assertEqual(
+            getattr(self.runtime._status_bar_draw, "_owner", None),
+            "example",
+        )
+
+    def test_poll_does_not_duplicate_status_bar_and_unregister_stops_recovery(self):
+        self.runtime.register()
+
+        self.runtime._poll_server()
+        self.runtime._poll_server()
+
+        self.assertEqual(
+            self.callbacks().count(self.runtime._status_bar_draw),
+            1,
+        )
+
+        self.status_bar.draw = self.original_draw
+        self.runtime.unregister()
+        self.runtime._poll_server()
+
+        self.assertNotIn(self.runtime._status_bar_draw, self.callbacks())
+        self.assertFalse(self.timers.is_registered(self.runtime._poll_server))
 
 
 if __name__ == "__main__":

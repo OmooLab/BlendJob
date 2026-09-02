@@ -428,7 +428,7 @@ class JobRuntime:
 
         for class_type in self.operator_classes():
             bpy.utils.register_class(class_type)
-        bpy.types.STATUSBAR_HT_header.append(self._status_bar_draw)
+        self._ensure_status_bar_draw()
         self._registered = True
         self.enable()
 
@@ -438,7 +438,7 @@ class JobRuntime:
         import bpy
 
         self.disable()
-        bpy.types.STATUSBAR_HT_header.remove(self._status_bar_draw)
+        self._remove_status_bar_draw()
         for class_type in reversed(self.operator_classes()):
             bpy.utils.unregister_class(class_type)
         self._registered = False
@@ -554,9 +554,27 @@ class JobRuntime:
         self.server.detach()
 
     def _poll_server(self):
+        if self._registered:
+            self._ensure_status_bar_draw()
         interval = self.server.poll(available=self.environment_ready())
         self.redraw_ui()
         return interval
+
+    def _ensure_status_bar_draw(self):
+        import bpy
+
+        status_bar = bpy.types.STATUSBAR_HT_header
+        draw_funcs = getattr(status_bar.draw, "_draw_funcs", ())
+        if self._status_bar_draw not in draw_funcs:
+            status_bar.append(self._status_bar_draw)
+
+    def _remove_status_bar_draw(self):
+        import bpy
+
+        status_bar = bpy.types.STATUSBAR_HT_header
+        draw_funcs = getattr(status_bar.draw, "_draw_funcs", ())
+        if self._status_bar_draw in draw_funcs:
+            status_bar.remove(self._status_bar_draw)
 
     def _draw_status_bar(self, owner, _context):
         if self.active_job is None:
