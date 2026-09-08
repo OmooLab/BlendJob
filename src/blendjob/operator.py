@@ -110,7 +110,6 @@ class JobOperatorBase:
             window=context.window,
         )
         context.window_manager.modal_handler_add(self)
-        runtime.redraw_ui(context, force=True)
         job.start_thread = threading.Thread(
             target=self._submit_job,
             args=(job, parameters),
@@ -201,7 +200,6 @@ class JobOperatorBase:
             context.window_manager.progress_end()
         job.runtime.finish_job(job)
         job.runtime.update_ui(context, 0.0 if cancelled else 1.0, message)
-        job.runtime.redraw_ui(context, force=True)
         return {"CANCELLED"} if cancelled else {"FINISHED"}
 
     def _update_from_job_status(self, context, job, status):
@@ -214,7 +212,6 @@ class JobOperatorBase:
             job.progress = max(job.progress, reported)
         message = str(status.get("message") or self.starting_message).strip()
         job.runtime.update_ui(context, job.progress, message)
-        job.runtime.redraw_ui(context, force=True)
 
     def _remove_job_timer(self, context):
         timer = getattr(self, "_timer", None)
@@ -234,7 +231,6 @@ class JobOperatorBase:
             context.window_manager.progress_end()
         runtime.finish_job(job)
         runtime.update_ui(context, 0.0, "Task cancelled")
-        runtime.redraw_ui(context, force=True)
 
     def _runtime(self):
         if self.job_runtime is None:

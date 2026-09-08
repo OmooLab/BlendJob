@@ -2,6 +2,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
@@ -176,7 +177,7 @@ class JobRuntimeStopTest(unittest.TestCase):
         self.assertTrue(job.cancelled)
         self.assertIsNone(runtime.active_job)
         self.assertFalse(server.auto_start)
-        runtime.redraw_ui.assert_called_once_with()
+        runtime.redraw_ui.assert_called_once_with(force=True)
 
     def test_stop_idle_server_without_job_cleanup(self):
         events = []
@@ -192,7 +193,7 @@ class JobRuntimeStopTest(unittest.TestCase):
 
         self.assertEqual(events, ["stop"])
         self.assertFalse(server.auto_start)
-        runtime.redraw_ui.assert_called_once_with()
+        runtime.redraw_ui.assert_called_once_with(force=True)
 
     def test_stop_failure_still_closes_active_job_and_redraws(self):
         events = []
@@ -211,7 +212,7 @@ class JobRuntimeStopTest(unittest.TestCase):
 
         self.assertEqual(events, ["cancel", "stop", "mark", "cleanup"])
         self.assertIsNone(runtime.active_job)
-        runtime.redraw_ui.assert_called_once_with()
+        runtime.redraw_ui.assert_called_once_with(force=True)
 
     def test_stop_cancels_job_while_submission_is_in_flight(self):
         events = []
@@ -277,6 +278,156 @@ class JobRuntimeStopTest(unittest.TestCase):
         self.assertEqual(result, {"CANCELLED"})
         cleanup.assert_not_called()
         window_manager.event_timer_remove.assert_called_once()
+
+
+class JobRuntimeRedrawTest(unittest.TestCase):
+    def setUp(self):
+        self.runtime = JobRuntime.__new__(JobRuntime)
+        self.runtime.active_job = None
+        self.notifications = []
+        self.window = None
+        self.context = SimpleNamespace(
+            window_manager=SimpleNamespace(windows=[], progress_update=Mock()),
+            temp_override=self.override,
+        )
+        bpy = ModuleType("bpy")
+        bpy.context = self.context
+        self.pending_redraws = []
+        bpy.app = SimpleNamespace(timers=SimpleNamespace(
+            is_registered=lambda callback: callback in self.pending_redraws,
+            register=self.pending_redraws.append,
+        ))
+        patcher = patch.dict(sys.modules, {"bpy": bpy})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def flush_redraws(self):
+        callbacks = self.pending_redraws[:]
+        self.pending_redraws.clear()
+        for callback in callbacks:
+            self.assertIsNone(callback())
+
+    @contextmanager
+    def override(self, *, window):
+        previous = self.window
+        self.window = window
+        try:
+            yield
+        finally:
+            self.window = previous
+
+    def add_window(self, workspace=None):
+        if workspace is None:
+            workspace = SimpleNamespace(
+                status_text_set_internal=lambda _text: self.notifications.append(
+                    (self.window, self.runtime.active_job)
+                ),
+            )
+        area = SimpleNamespace(
+            type="VIEW_3D", tag_redraw=Mock(),
+            regions=[SimpleNamespace(tag_redraw=Mock())],
+        )
+        window = SimpleNamespace(
+            workspace=workspace, screen=SimpleNamespace(areas=[area]),
+        )
+        self.context.window_manager.windows.append(window)
+        return window
+
+    def test_progress_reaches_windows_with_distinct_and_shared_workspaces(self):
+        first = self.add_window()
+        second = self.add_window()
+        third = self.add_window(first.workspace)
+        self.context.workspace = SimpleNamespace(status_text_set_internal=Mock())
+        self.runtime.update_ui(self.context, 0.4, "Downloading")
+        self.flush_redraws()
+        self.assertEqual(self.runtime.progress, 0.4)
+        self.assertEqual(self.runtime.message, "Downloading")
+        self.assertEqual([id(w) for w, _ in self.notifications],
+                         [id(first), id(second), id(third)])
+        self.context.workspace.status_text_set_internal.assert_not_called()
+        self.assertIsNone(self.window)
+        for window in (first, second, third):
+            window.screen.areas[0].tag_redraw.assert_called_once()
+            window.screen.areas[0].regions[0].tag_redraw.assert_called_once()
+
+    def test_unavailable_windows_do_not_prevent_later_notifications(self):
+        self.context.window_manager.windows.extend([
+            SimpleNamespace(screen=None, workspace=object()),
+            SimpleNamespace(screen=SimpleNamespace(areas=[]), workspace=None),
+        ])
+        self.add_window(SimpleNamespace(
+            status_text_set_internal=Mock(side_effect=ReferenceError("closed")),
+        ))
+        valid = self.add_window()
+        self.runtime.redraw_ui(force=True)
+        self.flush_redraws()
+        self.assertEqual(len(self.notifications), 1)
+        self.assertIs(self.notifications[0][0], valid)
+        self.assertIsNone(self.window)
+
+    def test_redraw_is_coalesced_and_uses_windows_after_closure(self):
+        closing = self.add_window()
+        self.runtime.update_ui(self.context, 0.1, "Working")
+        self.runtime.update_ui(self.context, 0.2, "Working")
+        self.assertEqual(len(self.pending_redraws), 1)
+        self.assertEqual(self.notifications, [])
+        self.context.window_manager.windows.remove(closing)
+        surviving = self.add_window()
+        self.flush_redraws()
+        self.assertEqual(len(self.notifications), 1)
+        self.assertIs(self.notifications[0][0], surviving)
+
+    def test_temporary_window_only_redraws_its_editor(self):
+        window = self.add_window()
+        window.screen.is_temporary = True
+        window.screen.areas[0].type = "PREFERENCES"
+        self.runtime.redraw_ui(self.context, force=True)
+        self.flush_redraws()
+        self.assertEqual(self.notifications, [])
+        window.screen.areas[0].tag_redraw.assert_called_once()
+
+    def test_ordinary_poll_redraw_preserves_status_text(self):
+        window = self.add_window()
+        self.runtime.redraw_ui()
+        self.assertEqual(self.notifications, [])
+        window.screen.areas[0].tag_redraw.assert_called_once()
+
+    def test_empty_window_collection_is_safe(self):
+        self.runtime.redraw_ui(force=True)
+        self.flush_redraws()
+        self.assertEqual(self.notifications, [])
+
+    def test_terminal_operator_cleanup_redraws_each_window_once(self):
+        self.add_window()
+        self.add_window()
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                self.notifications.clear()
+                operator = JobOperatorBase()
+                operator.job_runtime = self.runtime
+                job = JobOperatorState(
+                    self.runtime, operator, Mock(), job_id="job", started=True,
+                )
+                self.runtime.active_job = job
+                result = operator._close(
+                    self.context, job, "Finished", cancelled=cancelled,
+                )
+                self.flush_redraws()
+                self.assertEqual(result, {"CANCELLED"} if cancelled else {"FINISHED"})
+                self.assertEqual(len(self.notifications), 2)
+                self.assertTrue(all(active is None for _, active in self.notifications))
+
+    def test_server_stop_redraws_after_active_job_cleanup(self):
+        self.add_window()
+        self.runtime.server = Mock()
+        self.runtime.active_job = JobOperatorState(
+            self.runtime, SimpleNamespace(cleanup=Mock()), Mock(),
+            job_id="job", started=True,
+        )
+        self.runtime.stop()
+        self.flush_redraws()
+        self.assertEqual(len(self.notifications), 1)
+        self.assertIsNone(self.notifications[0][1])
 
 
 class JobRuntimeStatusBarTest(unittest.TestCase):
@@ -359,6 +510,12 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
 
     def callbacks(self):
         return getattr(self.status_bar.draw, "_draw_funcs", ())
+
+    def test_unregister_removes_pending_status_bar_redraw(self):
+        self.runtime.register()
+        self.timers.register(self.runtime._redraw_status_bars)
+        self.runtime.unregister()
+        self.assertFalse(self.timers.is_registered(self.runtime._redraw_status_bars))
 
     def test_poll_restores_status_bar_after_blender_rebuilds_header(self):
         self.runtime.register()

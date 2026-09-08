@@ -480,7 +480,7 @@ class JobRuntime:
             self.server.stop()
         finally:
             self.close_active()
-            self.redraw_ui()
+            self.redraw_ui(force=True)
 
     def update_ui(self, context, progress, message):
         self.progress = min(max(float(progress), 0.0), 1.0)
@@ -490,7 +490,7 @@ class JobRuntime:
             window_manager, "progress_update"
         ):
             window_manager.progress_update(int(self.progress * 100))
-        self.redraw_ui(context)
+        self.redraw_ui(context, force=True)
 
     def redraw_ui(self, context=None, force=False):
         try:
@@ -502,18 +502,32 @@ class JobRuntime:
         for window in getattr(window_manager, "windows", ()):
             screen = getattr(window, "screen", None)
             for area in getattr(screen, "areas", ()):
-                if area.type in {"STATUSBAR", "VIEW_3D", "PREFERENCES"}:
+                if area.type in {"VIEW_3D", "PREFERENCES"}:
                     area.tag_redraw()
                     for region in getattr(area, "regions", ()):
                         region.tag_redraw()
-        if not force:
-            return
-        workspace = getattr(context, "workspace", None)
-        if workspace is not None:
+        # Window destruction callbacks must finish before switching context.
+        if force and not bpy.app.timers.is_registered(self._redraw_status_bars):
+            bpy.app.timers.register(self._redraw_status_bars)
+
+    def _redraw_status_bars(self):
+        import bpy
+
+        context = bpy.context
+        for window in context.window_manager.windows:
+            screen = getattr(window, "screen", None)
+            workspace = getattr(window, "workspace", None)
+            if (
+                screen is None
+                or workspace is None
+                or getattr(screen, "is_temporary", False)
+            ):
+                continue
             try:
-                workspace.status_text_set_internal(None)
-            except (AttributeError, RuntimeError, TypeError):
-                pass
+                with context.temp_override(window=window):
+                    workspace.status_text_set_internal(None)
+            except (ReferenceError, RuntimeError):
+                continue
 
     def server_status(self):
         return dict(self.server.snapshot)
@@ -548,8 +562,10 @@ class JobRuntime:
         except ModuleNotFoundError:
             bpy = None
         timers = getattr(getattr(bpy, "app", None), "timers", None)
-        if timers is not None and timers.is_registered(self._poll_server):
-            timers.unregister(self._poll_server)
+        if timers is not None:
+            for callback in (self._poll_server, self._redraw_status_bars):
+                if timers.is_registered(callback):
+                    timers.unregister(callback)
         self._timer_registered = False
         self.server.detach()
 
