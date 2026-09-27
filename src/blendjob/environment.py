@@ -16,7 +16,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-UV_VERSION = "0.11.30"
+UV_VERSION = "0.12.11"
 ENVIRONMENT_SCHEMA = 1
 INSTALL_PHASES = 3
 BASE_PACKAGES = (
@@ -26,15 +26,15 @@ BASE_PACKAGES = (
 UV_ARTIFACTS = {
     "x86_64-pc-windows-msvc": (
         "uv-x86_64-pc-windows-msvc.zip",
-        "be8d78c992312212e5cc05e9f9de3fa996db73b7c86a186dfb9231eb9f91d33e",
+        "e94225dea91e051472847bd6d146d7d66c4f54ffcd1f106678866a99580845f9",
     ),
     "aarch64-apple-darwin": (
         "uv-aarch64-apple-darwin.tar.gz",
-        "9bed3567d496d8dab84ecf7a1247551ac94ef1baaebb7b65df008dd93e9dc357",
+        "e01b69ee15e81918d5e8fc9cf39b3db7f59c5576e5e306cd9b7aeb2c7b7321c3",
     ),
     "x86_64-unknown-linux-gnu": (
         "uv-x86_64-unknown-linux-gnu.tar.gz",
-        "04bc7d180d6138bf6dc08387acf507a823f397a98fea55da36b0ccc7fbce3b68",
+        "4ae93e0f148a18434cc094072547cec88912fc4a72b984183c7d0d0e9586cb5e",
     ),
 }
 UV_SOURCES = (

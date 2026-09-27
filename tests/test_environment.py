@@ -130,6 +130,33 @@ class EnvironmentTest(unittest.TestCase):
         )
         self.assertEqual(path, expected)
 
+    def test_uv_release_artifacts_match_supported_mirrors(self):
+        self.assertEqual(self.environment.UV_VERSION, "0.12.11")
+        self.assertEqual(
+            self.environment.UV_ARTIFACTS,
+            {
+                "x86_64-pc-windows-msvc": (
+                    "uv-x86_64-pc-windows-msvc.zip",
+                    "e94225dea91e051472847bd6d146d7d66c4f54ffcd1f106678866a99580845f9",
+                ),
+                "aarch64-apple-darwin": (
+                    "uv-aarch64-apple-darwin.tar.gz",
+                    "e01b69ee15e81918d5e8fc9cf39b3db7f59c5576e5e306cd9b7aeb2c7b7321c3",
+                ),
+                "x86_64-unknown-linux-gnu": (
+                    "uv-x86_64-unknown-linux-gnu.tar.gz",
+                    "4ae93e0f148a18434cc094072547cec88912fc4a72b984183c7d0d0e9586cb5e",
+                ),
+            },
+        )
+        self.assertEqual(
+            self.environment.UV_SOURCES,
+            (
+                "https://github.com/astral-sh/uv/releases/download/0.12.11",
+                "https://cnb.cool/astral-sh/uv/-/releases/download/0.12.11",
+            ),
+        )
+
     def test_install_phase_is_rendered_into_message_only(self):
         with tempfile.TemporaryDirectory() as directory:
             status_path = Path(directory) / "status.json"
