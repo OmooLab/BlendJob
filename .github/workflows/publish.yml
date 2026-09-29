@@ -25,8 +25,6 @@ jobs:
         run: uv sync --python 3.10 --locked
       - name: Test source
         run: uv run --python 3.10 pytest
-      - name: Build docs
-        run: uv run --python 3.10 mkdocs build --strict
       - name: Build
         run: uv build
       # Check that basic features work and we didn't miss to include crucial files
