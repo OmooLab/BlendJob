@@ -482,7 +482,7 @@ def install(storage_root, environment, status, source="official"):
     manifest.unlink(missing_ok=True)
     command_environment = install_environment_variables(mirror)
     install_python_environment(
-        [uv, "venv", "--clear", "--python", environment["python"], venv],
+        [uv, "venv", "--clear", "--managed-python", "--python", environment["python"], venv],
         status,
         environment=command_environment,
         mirror=mirror,

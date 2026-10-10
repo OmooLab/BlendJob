@@ -99,7 +99,7 @@ class EnvironmentTest(unittest.TestCase):
             ), patch.object(
                 self.environment,
                 "install_python_environment",
-            ), patch.object(
+            ) as install_python_environment, patch.object(
                 self.environment,
                 "install_packages",
             ) as install_packages:
@@ -119,6 +119,10 @@ class EnvironmentTest(unittest.TestCase):
             self.assertNotIn("stages", final_status)
             self.assertEqual(final_status["progress"], 1.0)
             self.assertEqual(final_status["message"], "Verifying installation ...")
+            self.assertEqual(
+                install_python_environment.call_args.args[0],
+                [uv, "venv", "--clear", "--managed-python", "--python", "3.12", root / ".venv"],
+            )
             self.assertTrue(install_packages.called)
 
     def test_environment_python_is_inside_runtime_storage(self):
