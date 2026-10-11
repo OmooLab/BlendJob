@@ -61,12 +61,6 @@ name = "blendjob"
 version = "0.1.20"
 source = { editable = "." }
 
-[package.optional-dependencies]
-server = [
-    { name = "fastapi" },
-    { name = "uvicorn" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "fastapi" },
@@ -79,11 +73,6 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "fastapi", marker = "extra == 'server'", specifier = "==0.139.2" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = "==0.51.0" },
-]
-provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [

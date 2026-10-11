@@ -24,12 +24,6 @@ Documentation = "https://docs.omoolab.xyz/blendjob/"
 Issues = "https://github.com/OmooLab/BlendJob/issues"
 Repository = "https://github.com/OmooLab/BlendJob"
 
-[project.optional-dependencies]
-server = [
-    "fastapi==0.139.2",
-    "uvicorn==0.51.0",
-]
-
 [dependency-groups]
 dev = [
     "fastapi==0.139.2",

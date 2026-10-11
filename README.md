@@ -90,11 +90,7 @@ python -m pip install blendjob
 uv add blendjob
 ```
 
-The default package has no dependencies, which keeps the Blender-side runtime lightweight. Install the `server` extra when creating a FastAPI app or running the server directly in a regular Python environment:
-
-```bash
-python -m pip install "blendjob[server]"
-```
+The package has no dependencies, which keeps the Blender-side runtime lightweight. BlendJob's environment installer automatically installs FastAPI and Uvicorn in the independent server environment. To create a FastAPI app or run the server directly in an existing Python environment, install those dependencies there separately.
 
 For a Blender extension, bundle the BlendJob wheel in `wheels/` and declare it in `blender_manifest.toml`:
 

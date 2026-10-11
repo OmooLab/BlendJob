@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Install bpy system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxi6 libxfixes3 libxrender1 libxxf86vm1 libxkbcommon0 libsm6
+      - name: Test source
+        run: uv run pytest tests
+      - name: Build
+        run: uv build
+      # Check that basic features work and we didn't miss to include crucial files
+      - name: Pytest test (wheel)
+        run: uv run --isolated --no-project --with dist/*.whl --with "fastapi==0.139.2" --with "uvicorn==0.51.0" --with pytest pytest tests
+      - name: Pytest test (source distribution)
+        run: uv run --isolated --no-project --with dist/*.tar.gz --with "fastapi==0.139.2" --with "uvicorn==0.51.0" --with pytest pytest tests
