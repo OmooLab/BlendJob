@@ -65,18 +65,18 @@ class JobClient:
     def clear_resource(self, name):
         return self.request("POST", f"/resources/{name}/clear")
 
-    def preview_job_files(self, protected_paths=()):
+    def preview_job_files(self):
         """Preview unused job files while the server is idle."""
         return self.request(
             "POST", "/job-files/preview",
-            {"protected_paths": list(protected_paths)}, timeout=60,
+            {}, timeout=60,
         )
 
-    def clear_job_files(self, jobs, protected_paths=()):
-        """Delete only the selected jobs, preserving referenced files."""
+    def clear_job_files(self, jobs):
+        """Delete only the selected jobs."""
         return self.request(
             "POST", "/job-files/clear",
-            {"jobs": list(jobs), "protected_paths": list(protected_paths)}, timeout=60,
+            {"jobs": list(jobs)}, timeout=60,
         )
 
     def shutdown(self):

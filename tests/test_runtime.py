@@ -483,6 +483,7 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
                 cls.callbacks.remove(callback)
 
         fake_bpy = ModuleType("bpy")
+        fake_bpy.props = SimpleNamespace(StringProperty=Mock(), BoolProperty=Mock())
         fake_bpy.types = SimpleNamespace(
             Operator=object,
             STATUSBAR_HT_header=StatusBarHeader,

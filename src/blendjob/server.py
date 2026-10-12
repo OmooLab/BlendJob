@@ -409,15 +409,15 @@ class JobServer:
         except OSError:
             pass
 
-    def preview_job_files(self, protected_paths=()):
+    def preview_job_files(self):
         """List idle job directories eligible for removal."""
-        return self._maintain_job_files(protected_paths)
+        return self._maintain_job_files()
 
-    def clear_job_files(self, jobs, protected_paths=()):
-        """Remove selected idle job directories, rechecking protected paths."""
-        return self._maintain_job_files(protected_paths, set(jobs))
+    def clear_job_files(self, jobs):
+        """Remove selected idle job directories."""
+        return self._maintain_job_files(set(jobs))
 
-    def _maintain_job_files(self, protected_paths, selected=None):
+    def _maintain_job_files(self, selected=None):
         with self.lock:
             if self.closed or self.active_job_id is not None or self._queued_job_count():
                 raise RuntimeError("Job Server is busy or stopped")
@@ -428,7 +428,6 @@ class JobServer:
                 return result
             if is_redirect(directory) or directory.resolve().parent != root:
                 raise ValueError("Jobs directory must be a local storage subdirectory")
-            protected = [Path(path).resolve() for path in protected_paths]
             for child in directory.iterdir():
                 if not re.fullmatch(r"[0-9a-f]{32}", child.name):
                     continue
@@ -436,9 +435,6 @@ class JobServer:
                     continue
                 try:
                     if is_redirect(child) or not child.is_dir() or child.resolve().parent != directory:
-                        result["skipped"] += 1
-                        continue
-                    if any(path.is_relative_to(child) for path in protected):
                         result["skipped"] += 1
                         continue
                     size = directory_bytes(child)
@@ -536,16 +532,14 @@ class JobServer:
 
         @app.post("/job-files/{action}")
         def job_files(action: str, payload: dict):
-            protected = payload.get("protected_paths", [])
             selected = payload.get("jobs") if action == "clear" else None
             if (action not in {"preview", "clear"}
-                    or not isinstance(protected, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in protected)
                     or (action == "clear" and (not isinstance(selected, list)
                         or not all(isinstance(p, str) and re.fullmatch(r"[0-9a-f]{32}", p) for p in selected)))):
                 raise HTTPException(status_code=422, detail="Invalid job file request")
             try:
-                return (self.preview_job_files(protected) if selected is None
-                        else self.clear_job_files(selected, protected))
+                return (self.preview_job_files() if selected is None
+                        else self.clear_job_files(selected))
             except RuntimeError as error:
                 raise HTTPException(status_code=409, detail=str(error))
             except (OSError, ValueError) as error:

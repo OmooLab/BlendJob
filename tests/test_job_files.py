@@ -1,4 +1,4 @@
-"""Keep cleanup bounded, reference-aware and serialized with active jobs."""
+"""Keep cleanup bounded and serialized with active jobs."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -57,15 +57,14 @@ def test_busy_server_refuses_preview_and_clear(server, state):
     assert job.exists()
 
 
-def test_new_jobs_and_new_references_are_rechecked(server):
+def test_clear_only_removes_previewed_jobs(server):
     job = create_job(server)
     selected = set(server.preview_job_files()["jobs"])
     new = create_job(server, "b" * 32)
-    result = server.clear_job_files(selected, [str(job / "output.bin")])
-    assert result["skipped"] == 1 and not result["jobs"]
-    assert job.exists() and new.exists()
-    server.clear_job_files(selected)
-    assert new.exists()
+    result = server.clear_job_files(selected)
+    assert result["jobs"] == [job.name]
+    assert not job.exists() and new.exists()
+
 
 
 def test_failed_delete_keeps_history_and_reports_partial_progress(server, monkeypatch):
@@ -107,7 +106,7 @@ def test_http_route_validates_requests_and_busy_state(server):
     app = server.create_app("test")
     route = next(route.endpoint for route in app.routes if route.path == "/job-files/{action}")
     for action, payload in (("clear", {}), ("clear", {"jobs": ["../data"]}),
-                            ("preview", {"protected_paths": ["relative"]}), ("unknown", {})):
+                            ("unknown", {})):
         with pytest.raises(HTTPException) as caught:
             route(action, payload)
         assert caught.value.status_code == 422
@@ -128,7 +127,7 @@ def test_client_previews_and_clears_files_over_http(server):
     from blendjob.client import JobClient
 
     job = create_job(server)
-    protected = create_job(server, "b" * 32)
+    unselected = create_job(server, "b" * 32)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         client = JobClient("127.0.0.1", listener.getsockname()[1])
@@ -141,16 +140,16 @@ def test_client_previews_and_clears_files_over_http(server):
                 time.sleep(0.01)
             assert host.started
             preview = client.preview_job_files()
-            assert set(preview["jobs"]) == {job.name, protected.name}
-            result = client.clear_job_files(preview["jobs"], [str(protected / "output.bin")])
+            assert set(preview["jobs"]) == {job.name, unselected.name}
+            result = client.clear_job_files([job.name])
             assert result["jobs"] == [job.name]
-            assert result["skipped"] == 1
-            assert not job.exists() and protected.exists()
+            assert result["skipped"] == 0
+            assert not job.exists() and unselected.exists()
             assert job.name not in server.jobs
             assert client.clear_job_files([])["jobs"] == []
-            server.active_job_id = protected.name
+            server.active_job_id = unselected.name
             with pytest.raises(RuntimeError, match="busy"):
-                client.clear_job_files([protected.name])
+                client.clear_job_files([unselected.name])
         finally:
             host.should_exit = True
             thread.join(timeout=5)

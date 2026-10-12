@@ -2,7 +2,6 @@
 import os
 import subprocess
 import threading
-from pathlib import Path
 
 from .environment import validate_environment
 from .storage import StorageLock, StorageMigration, read_json
@@ -87,8 +86,9 @@ class MaintenanceController:
             if self.source != self.target:
                 target_lock.acquire(self.target)
             self.check_cancelled()
-            self.perform()
-            self.state = {"state": "succeeded", "progress": 1.0, "message": "Server is ready"}
+            result = self.perform()
+            self.state = {"state": "succeeded", "progress": 1.0,
+                          "message": "Server is ready", "result": result}
         except Exception as error:
             state = "cancelled" if self._cancelled.is_set() else "failed"
             self.state = {"state": state, "error": str(error), "message": str(error)}
@@ -168,21 +168,10 @@ class SetupController(MaintenanceController):
 class MigrateController(MaintenanceController):
     """Copy and validate before saving the target and removing the source."""
 
-    def __init__(self, runtime, target):
-        super().__init__(runtime, target)
-        record = runtime.pending_migration()
-        self._committed = bool(record)
-        if record:
-            self.source = Path(record["source"])
-
     def perform(self):
         if self.source == self.target:
             return
         migration = StorageMigration(self.source, self.target, self.progress, self._cancelled.is_set)
-        if self._committed:
-            self.validate(self.source)
-            migration.cleanup_source()
-            return
         try:
             migration.copy()
             self.validate(self.source)
@@ -190,4 +179,7 @@ class MigrateController(MaintenanceController):
         except Exception:
             migration.discard_copy()
             raise
-        migration.cleanup_source()
+        try:
+            migration.cleanup_source()
+        except OSError as error:
+            return {"warning": f"Migration completed; old folder remains at {self.source}: {error}"}

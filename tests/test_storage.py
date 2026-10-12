@@ -84,12 +84,8 @@ class StorageMigrationTest(unittest.TestCase):
         self.assertTrue(self.source.exists())
         self.assertEqual((self.target / "data/sample.bin").read_bytes(), b"sample contents")
         self.assertTrue((self.target / "empty").is_dir())
-        self.assertEqual(storage.migration_record(self.target),
-                         {"source": str(self.source), "target": str(self.target)})
-        self.assertFalse(storage.migration_record(self.source))
         migration.cleanup_source()
         self.assertFalse(self.source.exists())
-        self.assertFalse(storage.migration_record(self.target))
 
     def test_conflicts_and_nested_targets_preserve_existing_data(self):
         self.target.mkdir(parents=True)
@@ -102,20 +98,6 @@ class StorageMigrationTest(unittest.TestCase):
         for target in (self.source, self.source.parent, self.source / "nested"):
             with self.assertRaises(ValueError):
                 storage.StorageMigration(self.source, target, Mock(), lambda: False)
-
-    def test_restart_before_save_recopies_new_and_changed_source_files(self):
-        self.migration().copy()
-        (self.source / "data/sample.bin").write_bytes(b"changed")
-        (self.source / "new-job.txt").write_text("new")
-        (self.target / "stale.txt").write_text("stale")
-        job = self.runtime.migrate_controller(self.target)
-        with patch.object(job, "validate"):
-            status = self.run_job(job)
-        self.assertEqual(status["state"], "succeeded")
-        self.assertEqual((self.target / "data/sample.bin").read_bytes(), b"changed")
-        self.assertEqual((self.target / "new-job.txt").read_text(), "new")
-        self.assertFalse((self.target / "stale.txt").exists())
-        self.assertFalse(self.source.exists())
 
     def test_save_runs_on_polling_thread_before_source_removal(self):
         main_thread = threading.get_ident()
@@ -167,21 +149,17 @@ class StorageMigrationTest(unittest.TestCase):
                 self.assertTrue(self.source.exists())
                 self.assertFalse(self.target.exists())
 
-    def test_cleanup_retry_uses_saved_target_without_copying(self):
+    def test_cleanup_failure_warns_without_failing_saved_migration(self):
         job = self.runtime.migrate_controller(self.target)
         with patch.object(job, "validate"), patch.object(storage, "remove_server_directory", side_effect=PermissionError("busy")):
             status = self.run_job(job)
-        self.assertEqual(status["state"], "failed")
-        self.assertIn("cleanup", status["error"])
-        self.assertEqual(self.runtime.storage_root(), self.target)
-        self.assertTrue(self.runtime.pending_migration())
-        resumed = self.runtime.migrate_controller()
-        self.assertFalse(resumed.cancellable)
-        with patch.object(resumed, "validate"), patch.object(storage.StorageMigration, "copy", side_effect=AssertionError("must not recopy")):
-            status = self.run_job(resumed)
         self.assertEqual(status["state"], "succeeded")
-        self.assertFalse(self.source.exists())
-        self.assertFalse(self.runtime.pending_migration())
+        self.assertIn(str(self.source), status["result"]["warning"])
+        self.assertIn("old folder remains", status["result"]["warning"])
+        self.assertEqual(self.runtime.storage_root(), self.target)
+        self.assertTrue(self.source.exists())
+        self.assertTrue((self.target / "data/sample.bin").is_file())
+        self.assertFalse(list((self.base / "state").glob("*.json")))
 
     def test_low_space_does_not_remove_source(self):
         job = self.runtime.migrate_controller(self.target)

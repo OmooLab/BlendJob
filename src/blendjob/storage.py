@@ -7,7 +7,6 @@ import stat
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 def read_json(path):
@@ -107,21 +106,6 @@ class StorageLock:
                 self.stream, self.root = None, None
 
 
-def migration_record_path(root):
-    return storage_state_path(root, "migration.json")
-
-
-def migration_record(root):
-    record = read_json(migration_record_path(root))
-    if not record:
-        return {}
-    source = Path(record["source"]).resolve()
-    target = Path(record["target"]).resolve()
-    if target != Path(root).resolve() or source == target or source in target.parents or target in source.parents:
-        raise ValueError("Invalid Server migration record")
-    return record
-
-
 def remove_server_directory(path):
     path = Path(path)
     if path.resolve() != path.absolute():
@@ -132,22 +116,11 @@ def remove_server_directory(path):
             raise ValueError("Server cleanup escaped its directory")
         item.chmod(item.stat().st_mode | stat.S_IWRITE)
         function(filename)
-    retry_file_operation(lambda: shutil.rmtree(path, onerror=retry))
-
-
-def retry_file_operation(operation, cancel_check=lambda: False):
-    deadline = time.monotonic() + 10
-    while True:
-        try:
-            return operation()
-        except PermissionError:
-            if cancel_check() or time.monotonic() >= deadline:
-                raise
-            time.sleep(0.1)
+    shutil.rmtree(path, onerror=retry)
 
 
 class StorageMigration:
-    """Keep one target record until its old source has been removed."""
+    """Copy storage into an empty target and discard it on failure."""
 
     def __init__(self, source, target, progress, cancel_check):
         self.source = Path(source).resolve()
@@ -159,20 +132,11 @@ class StorageMigration:
             raise ValueError("Choose a different, non-nested Server location")
 
     def copy(self):
-        record = migration_record(self.target)
-        if record:
-            if Path(record["source"]) != self.source:
-                raise ValueError("The target belongs to another migration")
-            self.owns_target = True
-            self.discard_copy()
         if self.target.exists() and (not self.target.is_dir() or any(self.target.iterdir())):
             raise ValueError(f"The target must be empty: {self.target}")
         if not self.source.is_dir():
             raise ValueError(f"Server folder does not exist: {self.source}")
         check_storage_location(self.target)
-        record_path = migration_record_path(self.target)
-        record_path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(record_path, {"source": str(self.source), "target": str(self.target)})
         self.owns_target = True
         files = []
         directories = []
@@ -215,16 +179,12 @@ class StorageMigration:
 
     def cleanup_source(self):
         self.progress(0.95, "Removing the old Server folder")
-        try:
-            if self.source.exists():
-                remove_server_directory(self.source)
-            migration_record_path(self.target).unlink(missing_ok=True)
-        except OSError as error:
-            raise RuntimeError(f"Migration needs cleanup: {self.source}. {error}") from error
+        if self.source.exists():
+            remove_server_directory(self.source)
+
 
     def discard_copy(self):
         if self.owns_target:
             if self.target.exists():
                 remove_server_directory(self.target)
-            migration_record_path(self.target).unlink(missing_ok=True)
             self.owns_target = False

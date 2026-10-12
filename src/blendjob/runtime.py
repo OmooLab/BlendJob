@@ -8,7 +8,7 @@ from .controller import ServerController
 from .entrypoint import normalized_entrypoint
 from .environment import environment_digest, normalized_environment, environment_python
 from .operator import JobOperatorBase
-from .storage import StorageLock, migration_record, read_json
+from .storage import StorageLock, read_json
 from .maintenance import MaintenanceController, SetupController, MigrateController
 
 
@@ -58,26 +58,16 @@ class JobRuntime:
 
     def setup_controller(self, target=None, *, mirror=False, online=True):
         """Install at a location, prepare add-on resources, and save it."""
-        if self.pending_migration():
-            raise RuntimeError("Finish the pending Server migration first")
         target = self.storage_root() if target is None else Path(target).expanduser().resolve()
-        if migration_record(target):
-            raise RuntimeError("Finish or retry the target migration first")
         self.inspect_installation(target)
         return SetupController(self, target, mirror=mirror, online=online)
 
-    def migrate_controller(self, target=None):
-        """Migrate to a target, or finish cleanup at the configured location."""
-        pending = self.pending_migration()
-        if pending:
-            target = Path(pending["target"])
-        elif target is None:
+    def migrate_controller(self, target):
+        """Migrate storage to the selected target."""
+        if not str(target).strip():
             raise ValueError("Choose a migration target")
         target = Path(target).expanduser().resolve()
         return MigrateController(self, target)
-
-    def pending_migration(self):
-        return migration_record(self.storage_root())
 
     def maintenance_busy(self):
         return isinstance(getattr(self.active_job, "controller", None), MaintenanceController)
@@ -170,37 +160,119 @@ class JobRuntime:
         runtime = self
         operator_base = self.JobOperatorBase
 
-        class InstallEnvironment(operator_base, bpy.types.Operator):
-            bl_idname = f"{runtime.namespace}.install_environment"
-            bl_label = "Install Environment"
-            job_type = "install-environment"
-            starting_message = "Starting installation ..."
+        class SetupServer(operator_base, bpy.types.Operator):
+            bl_idname = f"{runtime.namespace}.setup_server"
+            bl_label = "Set Up Server"
+            job_type = "setup-server"
+            starting_message = "Preparing Server"
 
-            def request(self, _context):
-                if not bpy.app.online_access:
-                    raise RuntimeError(
-                        "Online Access is disabled in Blender Preferences"
-                    )
-                return {"source": "official"}
+            directory: bpy.props.StringProperty(name="Server Location", subtype="DIR_PATH", options={"SKIP_SAVE"})
+            use_mirror: bpy.props.BoolProperty(name="Use China Mirror", default=False)
 
-            def controller(self, _runtime):
-                return runtime.setup_controller(online=bpy.app.online_access)
+            @classmethod
+            def poll(cls, _context):
+                return not runtime.server_busy()
 
-        class InstallEnvironmentMirror(operator_base, bpy.types.Operator):
-            bl_idname = f"{runtime.namespace}.install_environment_mirror"
-            bl_label = "Install Environment (Mirror)"
-            job_type = "install-environment"
-            starting_message = "Starting installation ..."
+            def invoke(self, context, _event):
+                if not self.directory:
+                    self.directory = str(runtime.storage_root())
+                return context.window_manager.invoke_props_dialog(self, width=460)
 
-            def request(self, _context):
-                if not bpy.app.online_access:
-                    raise RuntimeError(
-                        "Online Access is disabled in Blender Preferences"
-                    )
-                return {"source": "mirror"}
+            def draw(self, _context):
+                self.layout.prop(self, "directory")
+                self.layout.prop(self, "use_mirror")
+
+            def cancel(self, context):
+                if getattr(self, "_timer", None) is not None:
+                    super().cancel(context)
 
             def controller(self, _runtime):
-                return runtime.setup_controller(mirror=True, online=bpy.app.online_access)
+                return runtime.setup_controller(self.directory or None, mirror=self.use_mirror,
+                                                online=bpy.app.online_access)
+
+        class MigrateServer(operator_base, bpy.types.Operator):
+            bl_idname = f"{runtime.namespace}.migrate_server"
+            bl_label = "Migrate Server"
+            job_type = "migrate-server"
+            starting_message = "Migrating Server"
+
+            directory: bpy.props.StringProperty(subtype="DIR_PATH", options={"SKIP_SAVE"})
+            filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+
+            @classmethod
+            def poll(cls, _context):
+                return not runtime.server_busy()
+
+            def invoke(self, context, _event):
+                if not self.directory:
+                    self.directory = str(runtime.storage_root().parent)
+                context.window_manager.fileselect_add(self)
+                return {"RUNNING_MODAL"}
+
+            def cancel(self, context):
+                if getattr(self, "_timer", None) is not None:
+                    super().cancel(context)
+
+            def controller(self, _runtime):
+                if not self.directory.strip():
+                    raise ValueError("Choose a migration target")
+                selected = Path(self.directory).expanduser().resolve()
+                name = runtime.storage_root().name
+                target = next((path for path in (selected, *selected.parents)
+                               if path.name.lower() == name.lower()), selected / name)
+                return runtime.migrate_controller(target)
+
+            def response(self, _context, result):
+                warning = (result.value or {}).get("warning")
+                if warning:
+                    self.report({"WARNING"}, warning)
+                    return warning
+                return "Server migration completed"
+
+        class ClearJobFiles(bpy.types.Operator):
+            bl_idname = f"{runtime.namespace}.clear_job_files"
+            bl_label = "Clear Job Files"
+            bl_options = {"INTERNAL"}
+
+            @classmethod
+            def poll(cls, _context):
+                return runtime.environment_ready() and not runtime.server_busy()
+
+            def invoke(self, context, _event):
+                try:
+                    if not self.poll(context):
+                        raise RuntimeError("Wait for the current task to finish")
+                    connection = runtime.server.ensure()
+                    self._preview = connection.client.preview_job_files()
+                    self._connection = connection
+                    if not self._preview["jobs"]:
+                        self.report({"INFO"}, "No unused job files to clear")
+                        return {"CANCELLED"}
+                except (OSError, RuntimeError, ValueError) as error:
+                    self.report({"ERROR"}, str(error))
+                    return {"CANCELLED"}
+                return context.window_manager.invoke_props_dialog(self, width=460, confirm_text="Delete Files")
+
+            def draw(self, _context):
+                preview = self._preview
+                self.layout.label(text=f"Delete {len(preview['jobs'])} jobs ({preview['bytes'] / 1_000_000:.1f} MB)?")
+                self.layout.label(text="Permanently delete job outputs and logs.")
+
+            def execute(self, context):
+                try:
+                    if not self.poll(context) or not getattr(self, "_preview", {}).get("jobs"):
+                        raise RuntimeError("Preview and confirm cleanup while the server is idle")
+                    connection = runtime.server.connection
+                    if connection is None or connection is not self._connection:
+                        raise RuntimeError("Job Server changed; preview cleanup again")
+                    result = connection.client.clear_job_files(self._preview["jobs"])
+                except (OSError, RuntimeError, ValueError) as error:
+                    self.report({"ERROR"}, str(error))
+                    return {"CANCELLED"}
+                kept = result["skipped"] + len(result["failed"])
+                self.report({"WARNING"} if kept else {"INFO"},
+                            f"Deleted {len(result['jobs'])} jobs ({result['bytes'] / 1_000_000:.1f} MB); kept {kept}")
+                return {"FINISHED"}
 
         class CancelJob(bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.cancel_job"
@@ -269,8 +341,9 @@ class JobRuntime:
                 return {"FINISHED"}
 
         self._operator_classes = (
-            InstallEnvironment,
-            InstallEnvironmentMirror,
+            SetupServer,
+            MigrateServer,
+            ClearJobFiles,
             CancelJob,
             StartServer,
             StopServer,
