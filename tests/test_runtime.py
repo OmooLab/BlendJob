@@ -8,11 +8,11 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 import blendjob
-from blendjob.runtime import EnvironmentController, JobRuntime
+from blendjob.runtime import JobRuntime
 from blendjob.operator import JobOperatorBase, JobOperatorState
 
 
-class EnvironmentControllerTest(unittest.TestCase):
+class JobRuntimeEnvironmentTest(unittest.TestCase):
     def test_install_commands_include_explicit_source(self):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "example.py").touch()
@@ -29,6 +29,47 @@ class EnvironmentControllerTest(unittest.TestCase):
 
         self.assertEqual(official[-2:], ["--source", "official"])
         self.assertEqual(mirror[-2:], ["--source", "mirror"])
+
+    def test_storage_reads_do_not_create_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entrypoint = Path(directory) / "example.py"
+            entrypoint.touch()
+            target = Path(directory) / "server"
+            runtime = JobRuntime(f"{entrypoint}:server", storage_root=target,
+                                 environment={"python": "3.12"}, namespace="example")
+            self.assertEqual(runtime.storage_root(), target)
+            self.assertFalse(runtime.environment_ready())
+            self.assertFalse(target.exists())
+            runtime.install_command()
+            self.assertTrue((target / "environment.json").is_file())
+
+    def test_setup_target_inspection_and_execution_reject_unrelated_data(self):
+        from blendjob.storage import write_json
+        from blendjob.environment import environment_python
+        with tempfile.TemporaryDirectory() as directory:
+            entrypoint = Path(directory) / "app.py"
+            entrypoint.touch()
+            runtime = JobRuntime(f"{entrypoint}:server", storage_root=Path(directory) / "current",
+                                 environment={"python": "3.12"}, namespace="example")
+            target = Path(directory) / "selected"
+            self.assertFalse(runtime.inspect_installation(target)["environment_ready"])
+            self.assertFalse(target.exists())
+            target.mkdir()
+            unrelated = target / "keep.txt"
+            unrelated.write_text("keep")
+            with self.assertRaisesRegex(ValueError, "not a BlendJob"):
+                runtime.inspect_installation(target)
+            with self.assertRaisesRegex(ValueError, "not a BlendJob"):
+                runtime.setup_controller(target)
+            self.assertEqual(unrelated.read_text(), "keep")
+            write_json(target / "environment.json", {"python": "3.12"})
+            self.assertFalse(runtime.inspect_installation(target)["environment_ready"])
+            python = environment_python(target)
+            python.parent.mkdir(parents=True)
+            python.touch()
+            write_json(target / "manifest.json", {"environment_hash": runtime.environment_hash})
+            self.assertTrue(runtime.inspect_installation(target)["environment_ready"])
+            self.assertFalse(runtime.environment_ready())
 
     def test_progress_is_monotonic_for_one_job(self):
         runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
@@ -49,7 +90,7 @@ class EnvironmentControllerTest(unittest.TestCase):
         self.assertEqual(job.progress, 0.8)
         runtime.update_ui.assert_called_once_with(None, 0.8, "Working")
 
-    def test_progress_resets_when_post_install_job_changes(self):
+    def test_progress_resets_when_post_setup_job_changes(self):
         runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
         job = SimpleNamespace(
             job_id="environment",
@@ -62,15 +103,15 @@ class EnvironmentControllerTest(unittest.TestCase):
             SimpleNamespace(starting_message="Starting task"),
             None,
             job,
-            {"job_id": "model", "progress": 0.2, "message": "Downloading model"},
+            {"job_id": "setup-job", "progress": 0.2, "message": "Preparing resources"},
         )
 
-        self.assertEqual(job.progress_job_id, "model")
+        self.assertEqual(job.progress_job_id, "setup-job")
         self.assertEqual(job.progress, 0.2)
         runtime.update_ui.assert_called_once_with(
             None,
             0.2,
-            "Downloading model",
+            "Preparing resources",
         )
 
     def test_job_runtime_is_the_public_runtime_class(self):
@@ -82,40 +123,6 @@ class EnvironmentControllerTest(unittest.TestCase):
         )
         self.assertFalse(hasattr(blendjob, "JobOperatorState"))
         self.assertFalse(hasattr(blendjob, "ServerController"))
-
-    def test_post_install_failure_is_reported_as_failure(self):
-        runtime = SimpleNamespace()
-
-        def post_install(_runtime):
-            raise RuntimeError("model download failed")
-
-        runtime.post_install = post_install
-        controller = EnvironmentController(runtime)
-        controller.process = SimpleNamespace(poll=lambda: 0, returncode=0)
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            runtime,
-            "install_status_path",
-            return_value=Path(directory) / "missing.json",
-            create=True,
-        ):
-            controller.status("environment")
-            controller.post_thread.join(1.0)
-            status = controller.status("environment")
-
-        self.assertEqual(status["state"], "failed")
-        self.assertEqual(status["error"], "model download failed")
-        self.assertNotIn("post_install_error", status)
-
-    def test_completed_install_removes_transient_status(self):
-        with tempfile.TemporaryDirectory() as directory:
-            status_path = Path(directory) / "install-status.json"
-            status_path.write_text("{}", encoding="utf-8")
-            runtime = SimpleNamespace(install_status_path=lambda: status_path)
-            controller = EnvironmentController(runtime)
-
-            controller.mark_job_complete("environment")
-
-            self.assertFalse(status_path.exists())
 
     def test_server_runner_uses_bundled_launcher(self):
         runtime = SimpleNamespace(
@@ -510,6 +517,21 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
 
     def callbacks(self):
         return getattr(self.status_bar.draw, "_draw_funcs", ())
+
+    def test_server_controls_are_disabled_during_location_maintenance(self):
+        from blendjob.maintenance import MigrateController
+        controller = MigrateController.__new__(MigrateController)
+        controller._committed = False
+        self.runtime.active_job = SimpleNamespace(controller=controller)
+        operators = {operator.bl_idname: operator for operator in self.runtime.operator_classes()}
+        for action in ("start_server", "stop_server", "restart_server", "open_server_log"):
+            self.assertFalse(operators[f"example.{action}"].poll(None))
+        self.assertTrue(operators["example.cancel_job"].poll(None))
+        controller._committed = True
+        self.assertFalse(operators["example.cancel_job"].poll(None))
+        self.runtime.active_job = None
+        for action in ("start_server", "stop_server", "restart_server", "open_server_log"):
+            self.assertTrue(operators[f"example.{action}"].poll(None))
 
     def test_unregister_removes_pending_status_bar_redraw(self):
         self.runtime.register()

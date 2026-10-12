@@ -26,8 +26,8 @@ class EnvironmentTest(unittest.TestCase):
             "python": "3.12",
             "packages": ["numpy==2.4.2"],
             "platform_packages": {
-                "windows": ["onnxruntime-directml==1.24.4"],
-                "default": ["onnxruntime==1.24.4"],
+                "windows": ["platform-windows==1.0"],
+                "default": ["platform-default==1.0"],
             },
         }
 
@@ -65,8 +65,8 @@ class EnvironmentTest(unittest.TestCase):
         self.assertIn("fastapi==0.139.2", packages)
         self.assertIn("uvicorn==0.51.0", packages)
         self.assertIn("numpy==2.4.2", packages)
-        self.assertIn("onnxruntime-directml==1.24.4", packages)
-        self.assertNotIn("onnxruntime==1.24.4", packages)
+        self.assertIn("platform-windows==1.0", packages)
+        self.assertNotIn("platform-default==1.0", packages)
 
     def test_blendjob_is_not_installed_into_server_environment(self):
         normalized = self.environment.normalized_environment(
@@ -83,7 +83,7 @@ class EnvironmentTest(unittest.TestCase):
     def test_uses_default_platform_packages(self):
         with patch.object(self.environment.sys, "platform", "linux"):
             packages = self.environment.resolved_packages(self.config())
-        self.assertIn("onnxruntime==1.24.4", packages)
+        self.assertIn("platform-default==1.0", packages)
 
     def test_install_writes_manifest_from_environment_hash(self):
         with tempfile.TemporaryDirectory() as directory:

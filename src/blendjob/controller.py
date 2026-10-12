@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+
+from .storage import read_json, write_json
+
 import socket
 import subprocess
 import time
@@ -5,6 +10,8 @@ import uuid
 from dataclasses import dataclass
 
 from .client import JobClient, JobResult
+
+SERVER_DIRECTORY_LOCKS = {}
 
 
 @dataclass
@@ -26,12 +33,15 @@ class ServerController:
         log_path_factory,
         host="127.0.0.1",
         creationflags=0,
+        directory_lock=None, blocked=None,
     ):
         self.command_factory = command_factory
         self.cwd_factory = cwd_factory
         self.log_path_factory = log_path_factory
         self.host = host
         self.creationflags = creationflags
+        self.directory_lock = directory_lock
+        self.blocked = blocked
         self.connection = None
         self.process = None
         self.log_file = None
@@ -39,6 +49,11 @@ class ServerController:
         self.snapshot = {"state": "STOPPED", "message": "Stopped"}
 
     def start(self):
+        if self.blocked is not None and self.blocked():
+            self.auto_start = False
+            raise RuntimeError("Server Location is being changed")
+        if self.directory_lock is not None:
+            self.directory_lock.acquire(self.cwd_factory())
         if self.process is not None and self.process.poll() is None:
             return self.connection
         self._close_process()
@@ -59,7 +74,16 @@ class ServerController:
         except OSError:
             self.log_file.close()
             self.log_file = None
+            if self.directory_lock is not None:
+                self.directory_lock.release()
             raise
+        root = Path(self.cwd_factory()).resolve()
+        write_json(root / "server-process.json", {
+            "root": str(root), "pid": self.process.pid, "parent_pid": os.getpid(),
+            "port": port, "instance_id": instance_id,
+        })
+        if self.directory_lock is not None:
+            SERVER_DIRECTORY_LOCKS[instance_id] = self.directory_lock
         client = JobClient(self.host, port)
         self.connection = ServerConnection(
             port,
@@ -109,6 +133,8 @@ class ServerController:
 
     def stop(self, timeout=10.0):
         self.auto_start = False
+        if self.connection is None:
+            self._recover_connection()
         if self.connection is not None:
             try:
                 self.connection.client.shutdown()
@@ -122,7 +148,35 @@ class ServerController:
             time.sleep(0.05)
         self._close_process()
         self.connection = None
+        root = Path(self.log_path_factory()).parent.resolve()
+        record = read_json(root / "server-process.json")
+        if record.get("parent_pid") == os.getpid() and record.get("root") == str(root):
+            (root / "server-process.json").unlink(missing_ok=True)
+            registered_lock = SERVER_DIRECTORY_LOCKS.pop(record.get("instance_id"), None)
+            if registered_lock is not None:
+                registered_lock.release()
+        if self.directory_lock is not None:
+            self.directory_lock.release()
         self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+
+    def _recover_connection(self):
+        root = Path(self.log_path_factory()).parent.resolve()
+        record = read_json(root / "server-process.json")
+        if record.get("root") != str(root):
+            return
+        client = JobClient(self.host, record["port"])
+        try:
+            health = client.request("GET", "/health", timeout=0.5)
+        except RuntimeError:
+            return
+        if health.get("instance_id") != record.get("instance_id"):
+            raise RuntimeError("The registered Server instance does not match")
+        if record.get("parent_pid") != os.getpid():
+            raise RuntimeError("Another Blender process is using this Server folder")
+        if health.get("busy"):
+            raise RuntimeError("The registered Server is busy")
+        self.connection = ServerConnection(record["port"], record["pid"], record["instance_id"], client)
+        self.process = RegisteredServerProcess(record["pid"])
 
     def restart(self):
         self.stop()
@@ -188,10 +242,7 @@ class ServerController:
         return self.ensure().client.clear_resource(name)
 
     def detach(self):
-        self.auto_start = False
-        self.connection = None
-        self._close_process(terminate=True)
-        self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+        self.stop()
 
     def poll(self, *, available=True):
         if not available:
@@ -204,10 +255,12 @@ class ServerController:
             self._close_finished_process()
             if not self.auto_start:
                 self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+                if self.directory_lock is not None:
+                    self.directory_lock.release()
                 return 2.0
             try:
                 self.start()
-            except OSError as start_error:
+            except (OSError, RuntimeError) as start_error:
                 self.snapshot = {"state": "ERROR", "message": str(start_error)}
                 return 2.0
             self.snapshot = {"state": "STARTING", "message": "Starting"}
@@ -240,7 +293,7 @@ class ServerController:
         process = self.process
         self.process = None
         if process is not None and terminate and process.poll() is None:
-            process.terminate()
+            terminate_process_tree(process)
             try:
                 process.wait(timeout=3.0)
             except subprocess.TimeoutExpired:
@@ -249,3 +302,56 @@ class ServerController:
         if self.log_file is not None:
             self.log_file.close()
             self.log_file = None
+
+
+def terminate_process_tree(process):
+    """Terminate only the owned Server and its child processes."""
+    if os.name == "nt":
+        result = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode and process.poll() is None:
+            raise RuntimeError(f"Unable to stop Server process {process.pid}")
+    else:
+        process.terminate()
+
+
+class RegisteredServerProcess:
+    """Wait for a verified Server recovered after a Runtime reload."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def poll(self):
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            handle = kernel.OpenProcess(0x100000, False, self.pid)
+            if not handle:
+                return 0
+            try:
+                kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+                return None if kernel.WaitForSingleObject(handle, 0) == 258 else 0
+            finally:
+                kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+                kernel.CloseHandle(handle)
+        try:
+            os.kill(self.pid, 0)
+        except ProcessLookupError:
+            return 0
+        return None
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        while self.poll() is None:
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(str(self.pid), timeout)
+            time.sleep(0.05)
+
+    def terminate(self):
+        import signal
+        os.kill(self.pid, signal.SIGTERM)
+
+    def kill(self):
+        import signal
+        os.kill(self.pid, getattr(signal, "SIGKILL", signal.SIGTERM))

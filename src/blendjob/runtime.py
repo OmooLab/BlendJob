@@ -2,170 +2,14 @@ import json
 import os
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 from .controller import ServerController
 from .entrypoint import normalized_entrypoint
-from .environment import environment_digest, normalized_environment
+from .environment import environment_digest, normalized_environment, environment_python
 from .operator import JobOperatorBase
-
-
-class EnvironmentController:
-    """Install the declared Environment, then run arbitrary project setup."""
-
-    def __init__(self, runtime):
-        self.runtime = runtime
-        self.process = None
-        self.log_file = None
-        self.post_thread = None
-        self.post_status = {}
-        self.post_error = ""
-        self.cancelled = False
-        self._post_job_id = ""
-        self._lock = threading.Lock()
-
-    def submit(self, _job_type, parameters):
-        runtime = self.runtime
-        source = str(parameters.get("source", "official"))
-        if source not in {"official", "mirror"}:
-            raise ValueError(f"Unknown install source: {source}")
-        runtime.storage_root()
-        runtime.install_status_path().unlink(missing_ok=True)
-        self.post_thread = None
-        self.post_status = {}
-        self.post_error = ""
-        self.cancelled = False
-        self._post_job_id = ""
-        self.log_file = runtime.install_log_path().open(
-            "w", encoding="utf-8"
-        )
-        environment = os.environ.copy()
-        environment["PYTHONIOENCODING"] = "utf-8:backslashreplace"
-        environment["PYTHONUTF8"] = "1"
-        self.process = subprocess.Popen(
-            runtime.install_command(source=source),
-            stdout=self.log_file,
-            stderr=subprocess.STDOUT,
-            cwd=runtime.storage_root(),
-            creationflags=windows_creation_flags(),
-            env=environment,
-        )
-        return {
-            "job_id": "environment",
-            "directory": str(runtime.storage_root()),
-        }
-
-    def status(self, _job_id):
-        status = self._read_status()
-        if self.process is None or self.process.poll() is None:
-            return {
-                **status,
-                "state": "running",
-                "progress": status.get("progress", 0.0),
-            }
-        if self.process.returncode != 0:
-            return {
-                "message": "Environment installation failed",
-                **status,
-                "state": "failed",
-                "error": status.get("error", "Environment installer failed"),
-            }
-        if self.runtime.post_install is None:
-            return self._success_status()
-        if self.post_thread is None:
-            self.post_thread = threading.Thread(
-                target=self._run_post_install,
-                name="BlendJobPostInstall",
-                daemon=True,
-            )
-            self.post_thread.start()
-        if self.post_thread.is_alive():
-            with self._lock:
-                post_status = dict(self.post_status)
-            return {
-                "progress": post_status.get("progress", 0.0),
-                "message": post_status.get(
-                    "message",
-                    "Running post-install setup",
-                ),
-                "job_id": post_status.get("job_id", ""),
-                "state": "running",
-            }
-        return self._success_status()
-
-    def cancel(self, _job_id):
-        self.cancelled = True
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
-        if self._post_job_id:
-            try:
-                self.runtime.server.cancel(self._post_job_id)
-            except RuntimeError:
-                pass
-        return {"state": "cancelled"}
-
-    def mark_job_complete(self, _job_id):
-        if self.log_file is not None:
-            self.log_file.close()
-            self.log_file = None
-        try:
-            self.runtime.install_status_path().unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    def _run_post_install(self):
-        runtime = self.runtime
-        runtime._request_progress = self._update_post_progress
-        runtime._request_cancel_check = lambda: self.cancelled
-        try:
-            runtime.post_install(runtime)
-        except Exception as error:
-            self.post_error = str(error)
-        finally:
-            runtime._request_progress = None
-            runtime._request_cancel_check = None
-
-    def _update_post_progress(self, status):
-        job_id = str(status.get("job_id", ""))
-        with self._lock:
-            if job_id:
-                self._post_job_id = job_id
-            self.post_status = {
-                "job_id": job_id,
-                "progress": status.get("progress", 0.0),
-                "message": status.get("message", "Running post-install setup"),
-            }
-
-    def _success_status(self):
-        if self.cancelled:
-            return {
-                "progress": 1.0,
-                "message": "Environment installation cancelled",
-                "state": "cancelled",
-            }
-        if self.post_error:
-            return {
-                "progress": 1.0,
-                "message": f"Environment is ready; post-install failed: {self.post_error}",
-                "state": "failed",
-                "error": self.post_error,
-            }
-        return {
-            "progress": 1.0,
-            "message": "Environment is ready",
-            "state": "succeeded",
-        }
-
-    def _read_status(self):
-        try:
-            return json.loads(
-                self.runtime.install_status_path().read_text(
-                    encoding="utf-8"
-                )
-            )
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
+from .storage import StorageLock, migration_record, read_json
+from .maintenance import MaintenanceController, SetupController, MigrateController
 
 
 class JobRuntime:
@@ -179,18 +23,18 @@ class JobRuntime:
         storage_root,
         environment,
         namespace,
-        post_install=None,
+        post_setup=None,
     ):
         self.server_entrypoint = normalized_entrypoint(
             server_entrypoint,
             root=entrypoint_root,
         )
-        self.storage_root_factory = storage_root
+        self.storage_root_setting = storage_root
         self.environment = normalized_environment(environment)
         self.environment_hash = environment_digest(self.environment)
-        if post_install is not None and not callable(post_install):
-            raise TypeError("post_install must be callable")
-        self.post_install = post_install
+        if post_setup is not None and not callable(post_setup):
+            raise TypeError("post_setup must be callable")
+        self.post_setup = post_setup
         if not isinstance(namespace, str) or not namespace.strip():
             raise ValueError("namespace must be a non-empty string")
         self.namespace = namespace.strip()
@@ -202,41 +46,67 @@ class JobRuntime:
         self._timer_registered = False
         self._registered = False
         self._status_bar_draw = self._create_status_bar_draw()
-        self._request_progress = None
-        self._request_cancel_check = None
-        self._environment_controller = EnvironmentController(self)
+        self.directory_lock = StorageLock()
         self.server = ServerController(
             self._server_command,
             cwd_factory=self.storage_root,
-            log_path_factory=self.server_log_path,
+            log_path_factory=lambda: self.storage_root() / "server.log",
             creationflags=windows_creation_flags(),
+            directory_lock=self.directory_lock, blocked=self.maintenance_busy,
         )
         self.JobOperatorBase = self.operator_base()
 
-    def storage_root(self):
-        configured = (
-            self.storage_root_factory()
-            if callable(self.storage_root_factory)
-            else self.storage_root_factory
+    def setup_controller(self, target=None, *, mirror=False, online=True):
+        """Install at a location, prepare add-on resources, and save it."""
+        if self.pending_migration():
+            raise RuntimeError("Finish the pending Server migration first")
+        target = self.storage_root() if target is None else Path(target).expanduser().resolve()
+        if migration_record(target):
+            raise RuntimeError("Finish or retry the target migration first")
+        self.inspect_installation(target)
+        return SetupController(self, target, mirror=mirror, online=online)
+
+    def migrate_controller(self, target=None):
+        """Migrate to a target, or finish cleanup at the configured location."""
+        pending = self.pending_migration()
+        if pending:
+            target = Path(pending["target"])
+        elif target is None:
+            raise ValueError("Choose a migration target")
+        target = Path(target).expanduser().resolve()
+        return MigrateController(self, target)
+
+    def pending_migration(self):
+        return migration_record(self.storage_root())
+
+    def maintenance_busy(self):
+        return isinstance(getattr(self.active_job, "controller", None), MaintenanceController)
+
+    def server_controller(self, root):
+        """Create a Server connection for a directory already locked by maintenance."""
+        return ServerController(
+            lambda port, instance_id: self._server_command(port, instance_id, root=root),
+            cwd_factory=lambda: root, log_path_factory=lambda: root / "server.log",
+            creationflags=windows_creation_flags(),
         )
-        root = Path(configured).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+
+    def storage_root(self, path=None):
+        """Read or save the configured location without creating its directory."""
+        if path is not None:
+            path = Path(path).expanduser().resolve()
+        if callable(self.storage_root_setting):
+            configured = self.storage_root_setting() if path is None else self.storage_root_setting(path)
+        else:
+            if path is not None:
+                self.storage_root_setting = path
+            configured = self.storage_root_setting
+        return Path(configured).expanduser().resolve()
 
     def environment_directory(self):
         return self.storage_root() / ".venv"
 
     def environment_python(self):
-        directory = self.environment_directory()
-        if os.name == "nt":
-            return directory / "Scripts" / "python.exe"
-        return directory / "bin" / "python"
-
-    def environment_manifest_path(self):
-        return self.storage_root() / "manifest.json"
-
-    def environment_config_path(self):
-        return self.storage_root() / "environment.json"
+        return environment_python(self.storage_root())
 
     def install_status_path(self):
         return self.storage_root() / "install-status.json"
@@ -247,57 +117,38 @@ class JobRuntime:
     def server_log_path(self):
         return self.storage_root() / "server.log"
 
-    def environment_manifest(self):
-        try:
-            value = json.loads(
-                self.environment_manifest_path().read_text(encoding="utf-8")
-            )
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
-        return value if isinstance(value, dict) else {}
+    def environment_manifest(self, root=None):
+        root = self.storage_root() if root is None else Path(root)
+        return read_json(root / "manifest.json")
 
-    def environment_ready(self):
+    def environment_ready(self, root=None):
+        root = self.storage_root() if root is None else Path(root)
         return (
-            self.environment_python().is_file()
-            and self.environment_manifest().get("environment_hash")
-            == self.environment_hash
+            environment_python(root).is_file()
+            and self.environment_manifest(root).get("environment_hash") == self.environment_hash
         )
 
-    def write_environment_config(self):
-        path = self.environment_config_path()
-        path.write_text(
-            json.dumps(self.environment, indent=2),
-            encoding="utf-8",
-        )
-        return path
+    def inspect_installation(self, root):
+        """Inspect a setup target without creating or modifying its files."""
+        root = Path(root)
+        recognized = bool(self.environment_manifest(root) or read_json(root / "environment.json"))
+        if root.exists() and (not root.is_dir() or (any(root.iterdir()) and not recognized)):
+            raise ValueError(f"The target is not a BlendJob installation: {root}")
+        return {"environment_ready": self.environment_ready(root)}
 
-    def install_command(self, source="official"):
+    def install_command(self, source="official", *, root=None):
+        root = self.storage_root() if root is None else root
+        root.mkdir(parents=True, exist_ok=True)
+        config = root / "environment.json"
+        config.write_text(json.dumps(self.environment, indent=2), encoding="utf-8")
         installer = Path(__file__).with_name("installer") / "environment.py"
-        config = self.write_environment_config()
-        return [
-            sys.executable,
-            str(installer),
-            "--storage-root",
-            str(self.storage_root()),
-            "--config",
-            str(config),
-            "--status",
-            str(self.install_status_path()),
-            "--source",
-            source,
-        ]
+        return [sys.executable, str(installer), "--storage-root", str(root),
+                "--config", str(config), "--status", str(root / "install-status.json"),
+                "--source", source]
 
     def request(self, job_type, parameters, response=None):
         """Directly request one Server Job and return its JobResult."""
-        if self._request_cancel_check is not None and self._request_cancel_check():
-            raise RuntimeError("Server request was cancelled")
-        return self.server.request(
-            job_type,
-            parameters,
-            response=response,
-            progress=self._request_progress,
-            cancel_check=self._request_cancel_check,
-        )
+        return self.server.request(job_type, parameters, response=response)
 
     def operator_base(self):
         if self._operator_base is not None:
@@ -333,8 +184,7 @@ class JobRuntime:
                 return {"source": "official"}
 
             def controller(self, _runtime):
-                runtime.server.stop()
-                return runtime._environment_controller
+                return runtime.setup_controller(online=bpy.app.online_access)
 
         class InstallEnvironmentMirror(operator_base, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.install_environment_mirror"
@@ -350,8 +200,7 @@ class JobRuntime:
                 return {"source": "mirror"}
 
             def controller(self, _runtime):
-                runtime.server.stop()
-                return runtime._environment_controller
+                return runtime.setup_controller(mirror=True, online=bpy.app.online_access)
 
         class CancelJob(bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.cancel_job"
@@ -359,13 +208,22 @@ class JobRuntime:
 
             @classmethod
             def poll(cls, _context):
-                return runtime.active_job is not None
+                job = runtime.active_job
+                return job is not None and not (
+                    isinstance(getattr(job, "controller", None), MaintenanceController)
+                    and not job.controller.cancellable
+                )
 
             def execute(self, _context):
                 runtime.cancel_active()
                 return {"FINISHED"}
 
-        class StartServer(bpy.types.Operator):
+        class ServerControlOperator:
+            @classmethod
+            def poll(cls, _context):
+                return not runtime.maintenance_busy()
+
+        class StartServer(ServerControlOperator, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.start_server"
             bl_label = "Start Server"
 
@@ -377,7 +235,7 @@ class JobRuntime:
                     return {"CANCELLED"}
                 return {"FINISHED"}
 
-        class StopServer(bpy.types.Operator):
+        class StopServer(ServerControlOperator, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.stop_server"
             bl_label = "Stop Server"
 
@@ -385,7 +243,7 @@ class JobRuntime:
                 runtime.stop()
                 return {"FINISHED"}
 
-        class RestartServer(bpy.types.Operator):
+        class RestartServer(ServerControlOperator, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.restart_server"
             bl_label = "Restart Server"
 
@@ -397,7 +255,7 @@ class JobRuntime:
                     return {"CANCELLED"}
                 return {"FINISHED"}
 
-        class OpenServerLog(bpy.types.Operator):
+        class OpenServerLog(ServerControlOperator, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.open_server_log"
             bl_label = "Open Server Log"
 
@@ -449,7 +307,7 @@ class JobRuntime:
         self.active_job = job
 
     def finish_job(self, job):
-        if job.job_id:
+        if job.job_id or isinstance(job.controller, MaintenanceController):
             job.controller.mark_job_complete(job.job_id)
         try:
             job.operator.cleanup()
@@ -459,7 +317,7 @@ class JobRuntime:
 
     def cancel_active(self):
         job = self.active_job
-        if job is None:
+        if job is None or (isinstance(job.controller, MaintenanceController) and not job.controller.cancellable):
             return
         job.cancelled = True
         if not job.started or not job.job_id:
@@ -570,6 +428,9 @@ class JobRuntime:
         self.server.detach()
 
     def _poll_server(self):
+        if self.maintenance_busy():
+            self.redraw_ui()
+            return 0.5
         if self._registered:
             self._ensure_status_bar_draw()
         interval = self.server.poll(available=self.environment_ready())
@@ -617,16 +478,18 @@ class JobRuntime:
 
         return draw_status_bar
 
-    def _server_command(self, port, instance_id):
+    def _server_command(self, port, instance_id, *, root=None):
+        python = self.environment_python() if root is None else environment_python(root)
+        root = self.storage_root() if root is None else root
         launcher = Path(__file__).with_name("launcher") / "runner.py"
         return [
-            str(self.environment_python()),
+            str(python),
             "-u",
             str(launcher),
             "--entrypoint",
             self.server_entrypoint,
             "--storage-root",
-            str(self.storage_root()),
+            str(root),
             "--host",
             "127.0.0.1",
             "--port",

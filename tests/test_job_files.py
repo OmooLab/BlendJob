@@ -18,26 +18,26 @@ def server(tmp_path):
 def create_job(server, name="a" * 32):
     directory = server.storage_root / "jobs" / name
     directory.mkdir(parents=True)
-    (directory / "depth.exr").write_bytes(b"depth")
+    (directory / "output.bin").write_bytes(b"output")
     server.jobs[name] = SimpleNamespace(_snapshot=lambda: {"state": "succeeded"})
     return directory
 
 
 def test_preview_clear_and_history_preserve_resources(server):
     job = create_job(server)
-    model = server.storage_root / "model.onnx"
-    model.write_bytes(b"model")
+    shared_file = server.storage_root / "shared.bin"
+    shared_file.write_bytes(b"shared")
     log = server.storage_root / "server.log"
     log.write_text("log")
     resource = Mock()
-    server.resources["model_manager"] = resource
+    server.resources["shared_resource"] = resource
     preview = server.preview_job_files()
-    assert preview["jobs"] == [job.name] and preview["bytes"] == 5
+    assert preview["jobs"] == [job.name] and preview["bytes"] == 6
     assert job.exists() and job.name in server.jobs
     result = server.clear_job_files(preview["jobs"])
     assert result["jobs"] == [job.name] and not job.exists()
     assert job.name not in server.jobs
-    assert model.read_bytes() == b"model" and log.read_text() == "log"
+    assert shared_file.read_bytes() == b"shared" and log.read_text() == "log"
     resource.clear.assert_not_called()
 
 
@@ -61,7 +61,7 @@ def test_new_jobs_and_new_references_are_rechecked(server):
     job = create_job(server)
     selected = set(server.preview_job_files()["jobs"])
     new = create_job(server, "b" * 32)
-    result = server.clear_job_files(selected, [str(job / "depth.exr")])
+    result = server.clear_job_files(selected, [str(job / "output.bin")])
     assert result["skipped"] == 1 and not result["jobs"]
     assert job.exists() and new.exists()
     server.clear_job_files(selected)
@@ -83,14 +83,14 @@ def test_redirected_paths_are_never_deleted(server, monkeypatch, location):
     from blendjob import server as job_files
 
     job = create_job(server)
-    redirected = {"root": job.parent, "job": job, "nested": job / "depth.exr"}[location]
+    redirected = {"root": job.parent, "job": job, "nested": job / "output.bin"}[location]
     monkeypatch.setattr(job_files, "is_redirect", lambda path: path == redirected)
     if location == "root":
         with pytest.raises(ValueError, match="local storage"):
             server.clear_job_files([job.name])
     else:
         assert server.clear_job_files([job.name])["skipped"] == 1
-    assert (job / "depth.exr").read_bytes() == b"depth"
+    assert (job / "output.bin").read_bytes() == b"output"
 
 
 def test_only_uuid_job_directories_are_candidates(server):
@@ -106,7 +106,7 @@ def test_http_route_validates_requests_and_busy_state(server):
 
     app = server.create_app("test")
     route = next(route.endpoint for route in app.routes if route.path == "/job-files/{action}")
-    for action, payload in (("clear", {}), ("clear", {"jobs": ["../models"]}),
+    for action, payload in (("clear", {}), ("clear", {"jobs": ["../data"]}),
                             ("preview", {"protected_paths": ["relative"]}), ("unknown", {})):
         with pytest.raises(HTTPException) as caught:
             route(action, payload)
@@ -142,7 +142,7 @@ def test_client_previews_and_clears_files_over_http(server):
             assert host.started
             preview = client.preview_job_files()
             assert set(preview["jobs"]) == {job.name, protected.name}
-            result = client.clear_job_files(preview["jobs"], [str(protected / "depth.exr")])
+            result = client.clear_job_files(preview["jobs"], [str(protected / "output.bin")])
             assert result["jobs"] == [job.name]
             assert result["skipped"] == 1
             assert not job.exists() and protected.exists()

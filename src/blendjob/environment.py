@@ -539,3 +539,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def validate_environment(root, environment, source=None):
+    script = (
+        "import json,sys,platform,importlib.metadata as m; "
+        "print(json.dumps({'version':list(sys.version_info[:2]),"
+        "'platform':sys.platform,'machine':platform.machine(),"
+        "'packages':{name:m.version(name) for name in json.loads(sys.argv[1])},"
+        "'paths':[sys.prefix,sys.base_prefix,*sys.path]}))"
+    )
+    packages = dict(package.split("==", 1) for package in resolved_packages(environment))
+    process = subprocess.run(
+        [str(environment_python(root)), "-I", "-c", script, json.dumps(list(packages))],
+        capture_output=True, text=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        result = json.loads(process.stdout)
+    except ValueError as error:
+        raise RuntimeError("The Python environment cannot run; complete installation first") from error
+    expected = [int(part) for part in environment["python"].split(".")[:2]]
+    if (
+        process.returncode or result["version"] != expected
+        or result["platform"] != sys.platform
+        or result["machine"].lower() != platform.machine().lower()
+        or result["packages"] != packages
+    ):
+        raise RuntimeError("The Python environment does not match this platform or its dependencies")
+    if source is not None:
+        original = Path(source).resolve()
+        for value in result["paths"]:
+            path = Path(value).resolve()
+            if path == original or original in path.parents:
+                raise RuntimeError("The relocated Python still references the old Server folder")
