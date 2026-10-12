@@ -13,6 +13,24 @@ from blendjob.storage import StorageLock, read_json
 
 
 class ServerProcessLifecycleTest(unittest.TestCase):
+    def test_unresponsive_registered_process_blocks_start_and_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "server.py").write_text("", encoding="utf-8")
+            runtime = JobRuntime("server.py:server", entrypoint_root=root, storage_root=root,
+                                 environment={"python": "3.12"}, namespace="test")
+            record = {"root": str(root), "pid": os.getpid(), "parent_pid": os.getpid(),
+                      "port": 12345, "instance_id": "unresponsive"}
+            path = root / "server-process.json"
+            path.write_text(json.dumps(record), encoding="utf-8")
+            with patch("blendjob.controller.JobClient.request", side_effect=RuntimeError("unreachable")):
+                for action in (runtime.server.start, runtime.server.stop):
+                    with self.subTest(action=action.__name__):
+                        with self.assertRaisesRegex(RuntimeError, "still running but cannot be verified"):
+                            action()
+                        self.assertEqual(read_json(path), record)
+                        self.assertIsNone(runtime.server.process)
+
     def test_reloaded_runtime_stops_registered_server_and_releases_lease(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -27,6 +45,9 @@ class ServerProcessLifecycleTest(unittest.TestCase):
             self.assertEqual(record["parent_pid"], os.getpid())
             replacement = runtime.server_controller(root)
             try:
+                with patch("blendjob.controller.subprocess.Popen", side_effect=AssertionError("Must reuse registered Server")):
+                    connection = replacement.start()
+                self.assertEqual(connection.instance_id, record["instance_id"])
                 replacement.stop(timeout=5)
                 process.wait(timeout=5)
                 self.assertIsNotNone(process.poll())

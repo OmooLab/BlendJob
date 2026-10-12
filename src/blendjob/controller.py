@@ -52,6 +52,8 @@ class ServerController:
         if self.blocked is not None and self.blocked():
             self.auto_start = False
             raise RuntimeError("Server Location is being changed")
+        if self.process is None:
+            self._recover_connection()
         if self.directory_lock is not None:
             self.directory_lock.acquire(self.cwd_factory())
         if self.process is not None and self.process.poll() is None:
@@ -164,19 +166,25 @@ class ServerController:
         record = read_json(root / "server-process.json")
         if record.get("root") != str(root):
             return
+        process = RegisteredServerProcess(record["pid"])
+        if process.poll() is not None:
+            return
+        if record.get("parent_pid") != os.getpid():
+            raise RuntimeError("Another Blender process is using this Server folder")
         client = JobClient(self.host, record["port"])
         try:
             health = client.request("GET", "/health", timeout=0.5)
-        except RuntimeError:
-            return
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"Registered Server process {process.pid} is still running but cannot be verified; "
+                "restart Blender before changing the Server location"
+            ) from error
         if health.get("instance_id") != record.get("instance_id"):
             raise RuntimeError("The registered Server instance does not match")
-        if record.get("parent_pid") != os.getpid():
-            raise RuntimeError("Another Blender process is using this Server folder")
         if health.get("busy"):
             raise RuntimeError("The registered Server is busy")
         self.connection = ServerConnection(record["port"], record["pid"], record["instance_id"], client)
-        self.process = RegisteredServerProcess(record["pid"])
+        self.process = process
 
     def restart(self):
         self.stop()

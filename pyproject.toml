@@ -1,6 +1,6 @@
 [project]
 name = "blendjob"
-version = "0.1.21"
+version = "0.1.22"
 description = "Reusable local Job Server runtime for Blender add-ons"
 readme = "README.md"
 requires-python = ">=3.10"

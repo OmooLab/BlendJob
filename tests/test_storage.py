@@ -45,6 +45,39 @@ class StorageMigrationTest(unittest.TestCase):
         job.mark_job_complete("")
         return job.status("")
 
+    def test_migration_is_busy_while_server_stops_in_background(self):
+        from blendjob.operator import JobOperatorState
+        stopping = threading.Event()
+        release = threading.Event()
+        main_thread = threading.get_ident()
+
+        def stop():
+            self.assertNotEqual(threading.get_ident(), main_thread)
+            stopping.set()
+            if not release.wait(5):
+                raise RuntimeError("Test did not release Server shutdown")
+
+        with patch.object(self.runtime.server, "stop", side_effect=stop) as stop_server:
+            controller = self.runtime.migrate_controller(self.target)
+            stop_server.assert_not_called()
+            job = JobOperatorState(self.runtime, Mock(), controller)
+            self.runtime.begin_job(job)
+            with patch.object(controller, "perform") as perform:
+                try:
+                    controller.submit("migrate", {})
+                    self.assertTrue(stopping.wait(2))
+                    self.assertTrue(self.runtime.server_busy())
+                    self.assertTrue(self.runtime.maintenance_busy())
+                    self.assertEqual(controller.status("")["message"], "Stopping Server")
+                    perform.assert_not_called()
+                    controller.cancel("")
+                finally:
+                    release.set()
+                    self.runtime.finish_job(job)
+                perform.assert_not_called()
+            self.assertIsNone(self.runtime.active_job)
+            self.assertEqual(controller.status("")["state"], "cancelled")
+
     def test_copy_verifies_contents_and_preserves_empty_directories(self):
         migration = self.migration()
         migration.copy()

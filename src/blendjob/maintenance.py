@@ -15,7 +15,6 @@ class MaintenanceController:
         self.runtime = runtime
         self.source = runtime.storage_root()
         self.target = target
-        runtime.server.stop()
         self.server = runtime.server_controller(target)
         self._cancelled = threading.Event()
         self._save_finished = threading.Event()
@@ -80,6 +79,10 @@ class MaintenanceController:
     def run(self):
         source_lock, target_lock = StorageLock(), StorageLock()
         try:
+            self.check_cancelled()
+            self.progress(0.0, "Stopping Server")
+            self.runtime.server.stop()
+            self.check_cancelled()
             source_lock.acquire(self.source)
             if self.source != self.target:
                 target_lock.acquire(self.target)
