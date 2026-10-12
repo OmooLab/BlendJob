@@ -336,6 +336,12 @@ class RegisteredServerProcess:
                 kernel.CloseHandle.argtypes = [ctypes.c_void_p]
                 kernel.CloseHandle(handle)
         try:
+            pid, _status = os.waitpid(self.pid, os.WNOHANG)
+            if pid:
+                return 0
+        except ChildProcessError:
+            pass
+        try:
             os.kill(self.pid, 0)
         except ProcessLookupError:
             return 0
