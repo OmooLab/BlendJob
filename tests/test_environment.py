@@ -157,7 +157,7 @@ class EnvironmentTest(unittest.TestCase):
             self.environment.UV_SOURCES,
             (
                 "https://github.com/astral-sh/uv/releases/download/0.12.11",
-                "https://cnb.cool/astral-sh/uv/-/releases/download/0.12.11",
+                "https://mirror.omoolab.xyz/uv/0.12.11",
             ),
         )
 
@@ -251,7 +251,7 @@ class EnvironmentTest(unittest.TestCase):
 
         self.assertEqual(
             environment["UV_PYTHON_INSTALL_MIRROR"],
-            self.environment.PYTHON_SOURCES[1],
+            "https://mirror.omoolab.xyz/python-build-standalone",
         )
         self.assertEqual(
             environment["UV_INDEX_URL"],

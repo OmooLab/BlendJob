@@ -39,11 +39,11 @@ UV_ARTIFACTS = {
 }
 UV_SOURCES = (
     f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
-    f"https://cnb.cool/astral-sh/uv/-/releases/download/{UV_VERSION}",
+    f"https://mirror.omoolab.xyz/uv/{UV_VERSION}",
 )
 PYTHON_SOURCES = (
     "https://github.com/astral-sh/python-build-standalone/releases/download",
-    "https://cnb.cool/astral-sh/python-build-standalone/-/releases/download",
+    "https://mirror.omoolab.xyz/python-build-standalone",
 )
 PYPI_SOURCES = (
     "https://pypi.org/simple",

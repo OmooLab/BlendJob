@@ -29,7 +29,7 @@ BlendJob 会加入运行 Job Server 所需的 FastAPI 与 Uvicorn。随 Extensio
 `runtime.register()` 提供两个安装 Operator：
 
 - `<namespace>.install_environment`：使用官方 uv、Python 与 PyPI 下载源
-- `<namespace>.install_environment_mirror`：使用 CNB 的 uv Release、CNB 的 Python 镜像与清华 PyPI
+- `<namespace>.install_environment_mirror`：使用 OmooLab R2 的 uv 与 Python 镜像与清华 PyPI
 
 安装过程依次准备 uv、Python 和 packages，并把实时消息与进度显示在 Blender 状态栏。安装源配置只作用于当前安装子进程。
 
