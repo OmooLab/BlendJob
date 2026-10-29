@@ -69,7 +69,7 @@ class JobOperatorBase:
         return operator_properties(self)
 
     def response(self, _context, _result):
-        """Apply an optional successful result on Blender's main thread."""
+        """Apply the result on Blender's main thread and optionally return an INFO message."""
 
     def cleanup(self):
         """Release invocation resources after every terminal outcome."""
@@ -153,7 +153,9 @@ class JobOperatorBase:
                 "directory": str(job.directory),
                 **status,
             })
-            self.response(context, result)
+            message = self.response(context, result)
+            if message:
+                self.report({"INFO"}, message)
             return {"FINISHED"}
         finally:
             self.cleanup()
@@ -189,7 +191,10 @@ class JobOperatorBase:
         else:
             job.progress = max(job.progress, reported)
         message = str(status.get("message") or self.starting_message).strip()
-        job.runtime.update_ui(context, job.progress, message)
+        job.runtime.update_ui(
+            context, job.progress, message,
+            message_args=status.get("message_args"), phase=status.get("phase"),
+        )
 
     def _remove_job_timer(self, context):
         timer = getattr(self, "_timer", None)

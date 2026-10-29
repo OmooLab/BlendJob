@@ -87,7 +87,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
         )
 
         self.assertEqual(job.progress, 0.8)
-        runtime.update_ui.assert_called_once_with(None, 0.8, "Working")
+        runtime.update_ui.assert_called_once_with(None, 0.8, "Working", message_args=None, phase=None)
 
     def test_progress_resets_when_job_changes(self):
         runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
@@ -111,6 +111,8 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
             None,
             0.2,
             "Preparing resources",
+            message_args=None,
+            phase=None,
         )
 
     def test_job_runtime_is_the_public_runtime_class(self):

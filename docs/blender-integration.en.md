@@ -86,6 +86,8 @@ def cleanup(self):
 
 ## Register the Runtime
 
+Business progress uses the add-on's Blender translation table; see [Progress and translation](server-jobs.en.md#progress-and-translation).
+
 Register application types before the Runtime and unregister them in reverse order:
 
 ```python

@@ -1,26 +1,15 @@
-"""Translate BlendJob UI at display time, keeping process messages unchanged."""
-import re
-from string import Formatter
+"""Translate progress templates through Blender at display time."""
 
 
-def translate_progress(message):
-    """Resolve the current Blender interface language without translating parameters."""
+def translate_progress(message, message_args=None):
+    """Translate the template before formatting its unchanged parameters."""
     try:
         import bpy
     except ModuleNotFoundError:
-        return message
-
-    translated = bpy.app.translations.pgettext_iface(message)
-    if translated != message:
-        return translated
-    phase = re.fullmatch(r"(\d+/\d+) (.+)", message)
-    if phase:
-        return f"{phase[1]} {translate_progress(phase[2])}"
-    for pattern, template in _PROGRESS_PATTERNS:
-        match = pattern.fullmatch(message)
-        if match:
-            return bpy.app.translations.pgettext_iface(template).format(**match.groupdict())
-    return message
+        translated = message
+    else:
+        translated = bpy.app.translations.pgettext_iface(message)
+    return translated.format(**message_args) if message_args else translated
 
 
 _ZH_HANS = {
@@ -71,6 +60,8 @@ _ZH_HANS = {
     'Busy': '忙碌',
     'Control process exited': '控制进程已退出',
     'Another job is running': '另一个任务正在运行',
+    'Folder migration completed': '文件夹迁移已完成',
+    'Job files inspected': '任务文件已检查',
     'Reading job files': '正在读取任务文件',
     'Online Access is disabled': '网络访问已禁用',
     'Delete {count} jobs ({size} MB)?': '删除 {count} 个任务（{size} MB）？',
@@ -92,11 +83,3 @@ TRANSLATIONS = {
         for context in ("*", "Operator")
     },
 }
-
-_PROGRESS_PATTERNS = tuple(
-    (re.compile("".join(
-        re.escape(literal) + (f"(?P<{field}>.+)" if field else "")
-        for literal, field, _spec, _conversion in Formatter().parse(template)
-    )), template)
-    for template in sorted((message for message in _ZH_HANS if "{" in message), key=len, reverse=True)
-)

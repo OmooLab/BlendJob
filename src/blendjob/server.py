@@ -78,6 +78,7 @@ class JobContext:
         *,
         state,
         error=None,
+        message_args=None,
         result=_NO_RESULT,
     ):
         snapshot = {
@@ -88,6 +89,8 @@ class JobContext:
             "message": str(message),
             "directory": str(self.directory),
         }
+        if message_args:
+            snapshot["message_args"] = dict(message_args)
         if error:
             snapshot["error"] = str(error)
         if result is not _NO_RESULT:
@@ -95,9 +98,9 @@ class JobContext:
         with self._lock:
             self._status = snapshot
 
-    def progress(self, progress, message):
-        """Publish running progress from a Job handler."""
-        self._update(progress, message, state="running")
+    def progress(self, progress, message, **message_args):
+        """Publish a message template and parameters for Blender UI translation."""
+        self._update(progress, message, state="running", message_args=message_args)
 
     def log(self, message, *, level="INFO"):
         """Append one Handler detail to this Job's own log file."""
@@ -126,6 +129,7 @@ class JobContext:
                 **self._status,
                 "state": "cancelling",
                 "message": "Cancelling job",
+                "message_args": {},
             }
             return True
 

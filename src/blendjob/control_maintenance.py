@@ -32,8 +32,12 @@ class MaintenanceOperation:
     def cancellable(self):
         return not self._committed
 
-    def progress(self, value, message):
+    def progress(self, value, message, *, message_args=None, phase=None):
         self.state = {"state": "running", "progress": value, "message": message}
+        if message_args:
+            self.state["message_args"] = message_args
+        if phase is not None:
+            self.state["phase"] = phase
         self.publish(self.state)
 
     def cancelled(self):
@@ -129,7 +133,11 @@ class SetupOperation(MaintenanceOperation):
                         time.sleep(0.2)
                         self.check_cancelled()
                         status = read_json(status_path)
-                        self.progress(0.05 + 0.55 * status.get("progress", 0), status.get("message", "Installing environment"))
+                        self.progress(
+                            0.05 + 0.55 * status.get("progress", 0),
+                            status.get("message", "Installing environment"),
+                            message_args=status.get("message_args"), phase=status.get("phase"),
+                        )
                     if process.returncode:
                         raise RuntimeError(f"Environment installation failed; see {self.target / 'install.log'}")
                 finally:

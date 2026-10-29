@@ -86,6 +86,8 @@ def cleanup(self):
 
 ## 注册 Runtime
 
+业务进度使用插件的 Blender 翻译表，示例见[进度与翻译](server-jobs.md)。
+
 先注册业务类型，再注册 Runtime；注销时按相反顺序：
 
 ```python

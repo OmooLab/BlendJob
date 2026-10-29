@@ -138,14 +138,14 @@ class EnvironmentInstallationTest(unittest.TestCase):
         )
 
 
-    def test_install_phase_is_rendered_into_message_only(self):
+    def test_install_status_preserves_template_parameters_and_phase(self):
         with tempfile.TemporaryDirectory() as directory:
             status_path = Path(directory) / "status.json"
             self.installer.write_status(
                 status_path,
                 0.25,
-                "Downloading Python 75.0 KiB/s",
-                phase=2,
+                "Downloading Python {rate}",
+                phase=2, rate="75.0 KiB/s",
             )
             status = json.loads(status_path.read_text(encoding="utf-8"))
 
@@ -153,7 +153,9 @@ class EnvironmentInstallationTest(unittest.TestCase):
             status,
             {
                 "progress": 0.25,
-                "message": "2/3 Downloading Python 75.0 KiB/s",
+                "message": "Downloading Python {rate}",
+                "message_args": {"rate": "75.0 KiB/s"},
+                "phase": {"index": 2, "total": 3},
             },
         )
 
@@ -173,7 +175,7 @@ class EnvironmentInstallationTest(unittest.TestCase):
             self.installer,
             "write_status",
             side_effect=lambda _path, progress, message, **_details: reports.append(
-                (progress, message)
+                (progress, message, _details)
             ),
         ):
             self.installer._download(
@@ -188,8 +190,9 @@ class EnvironmentInstallationTest(unittest.TestCase):
 
         self.assertEqual(
             reports[-1][1],
-            "Downloading uv 75.0 KiB/s",
+            "Downloading uv {rate}",
         )
+        self.assertEqual(reports[-1][2], {"phase": 1, "rate": "75.0 KiB/s"})
 
 
     def test_official_install_overrides_inherited_source_configuration(self):
@@ -268,9 +271,10 @@ class EnvironmentInstallationTest(unittest.TestCase):
 
         messages = [item[1] for item in reports]
         self.assertIn("Checking Python ...", messages)
-        self.assertIn("Downloading Python 75.0 KiB/s", messages)
+        self.assertIn("Downloading Python {rate}", messages)
+        self.assertIn({"phase": 2, "rate": "75.0 KiB/s"}, [item[2] for item in reports])
         self.assertIn("Installing Python ...", messages)
-        self.assertTrue(all(item[2] == {"phase": 2} for item in reports))
+        self.assertTrue(all(item[2]["phase"] == 2 for item in reports))
 
 
     def test_package_output_reports_count_and_mirror(self):
@@ -305,6 +309,7 @@ class EnvironmentInstallationTest(unittest.TestCase):
 
         messages = [item[1] for item in reports]
         self.assertIn("Resolving packages (mirror) ...", messages)
-        self.assertIn("Downloading packages (mirror) 2/40", messages)
+        self.assertIn("Downloading packages (mirror) {count}", messages)
+        self.assertIn({"phase": 3, "count": "2/40"}, [item[2] for item in reports])
         self.assertIn("Installing packages ...", messages)
-        self.assertTrue(all(item[2] == {"phase": 3} for item in reports))
+        self.assertTrue(all(item[2]["phase"] == 3 for item in reports))

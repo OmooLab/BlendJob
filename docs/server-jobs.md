@@ -40,22 +40,63 @@ Handler 常用的上下文成员如下：
 | `job_type` | 当前 Job 类型 |
 | `storage_root` | Runtime 配置的持久根目录 |
 | `directory` | 当前 Job 的独立工作目录 |
-| `progress(value, message)` | 发布 0.0–1.0 进度与显示文本 |
+| `progress(value, message, **message_args)` | 发布 0.0–1.0 进度、消息模板与参数 |
 | `check_cancelled()` | 在安全检查点响应取消 |
 | `resource(name)` | 取得 Server Resource |
 | `log(message, level="INFO")` | 把 Handler 细节写入当前 Job 的 `job.log` |
 
 BlendJob 根据 Handler 的执行结果维护 `queued`、`running`、`cancelling`、`succeeded`、`failed` 和 `cancelled` 状态。
 
-## 报告进度
+## 进度与翻译
+
+Handler 使用英文消息模板，动态值作为关键字参数传入：
 
 ```python
-context.progress(0.05, "Loading input")
-context.progress(0.40, "Running inference")
-context.progress(0.90, "Saving output")
+context.progress(0.1, "Preparing image")
+context.progress(
+    0.5,
+    "Processing image {index}/{total}",
+    index=3,
+    total=6,
+)
+context.progress(1.0, "Processing complete")
 ```
 
-Runtime 把最新的进度和消息显示在 Blender 状态栏。对同一个 Job，界面进度保持单调递增。
+在插件的 `translations.py` 中维护同一份 Blender 翻译表：
+
+```python
+TRANSLATIONS = {
+    "zh_HANS": {
+        ("*", "Preparing image"): "正在准备图像",
+        ("*", "Processing image {index}/{total}"): "正在处理图像 {index}/{total}",
+        ("*", "Processing complete"): "处理完成",
+    },
+}
+```
+
+`"*"` 是 Blender 的默认翻译上下文。译文保留相同的参数名，例如 `{index}` 和 `{total}`。
+
+将翻译表注册合入插件已有的 `register()` 和 `unregister()`：
+
+```python
+import bpy
+
+from .translations import TRANSLATIONS
+
+
+def register():
+    bpy.app.translations.register(__package__, TRANSLATIONS)
+    # Register the add-on's classes and runtime here.
+
+
+def unregister():
+    # Unregister the runtime and classes here.
+    bpy.app.translations.unregister(__package__)
+```
+
+已有翻译表的插件直接添加词条即可。`JobRuntime` 使用 Blender 的 `pgettext_iface()`，显示时先翻译模板，再填入参数，跟随当前界面语言和界面翻译开关。
+
+固定文字直接传入；带参数的文字保持模板原样，把格式化留给 Runtime。最新进度显示在 Blender 状态栏，同一个 Job 的界面进度保持单调递增。
 
 ## 响应取消
 

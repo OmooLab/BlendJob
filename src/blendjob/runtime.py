@@ -43,11 +43,16 @@ class JobRuntime:
     @property
     def message(self):
         """Translate built-in progress text in the current interface language."""
-        return translate_progress(self._progress_message)
+        message = translate_progress(self._progress_message, self._progress_message_args)
+        if self._progress_phase is not None:
+            message = f"{self._progress_phase['index']}/{self._progress_phase['total']} {message}"
+        return message
 
     @message.setter
     def message(self, value):
         self._progress_message = str(value)
+        self._progress_message_args = {}
+        self._progress_phase = None
 
     def setup_controller(self, target=None, *, mirror=False, online=True):
         """Install and validate an environment, then save its location."""
@@ -184,6 +189,8 @@ class JobRuntime:
                 warning = (result.value or {}).get("warning")
                 if warning:
                     self.report({"WARNING"}, warning)
+                    return
+                return "Folder migration completed"
 
         class ClearJobFiles(operator_base, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.clear_job_files"
@@ -228,15 +235,18 @@ class JobRuntime:
                 if self._action == "preview_files":
                     self._preview = value
                     if not value["jobs"]:
-                        self.report({"INFO"}, "No unused job files to clear")
+                        return "No unused job files to clear"
                     else:
                         context.window_manager.invoke_props_dialog(self, width=460, confirm_text="Delete Files")
-                    return
+                    return "Job files inspected"
                 kept = value["skipped"] + len(value["failed"])
                 message = bpy.app.translations.pgettext_iface(
                     "Deleted {count} jobs ({size} MB); kept {kept}"
                 ).format(count=len(value["jobs"]), size=f"{value['bytes'] / 1_000_000:.1f}", kept=kept)
-                self.report({"WARNING"} if kept else {"INFO"}, message)
+                if kept:
+                    self.report({"WARNING"}, message)
+                    return
+                return message
 
         class CancelJob(bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.cancel_job"
@@ -382,15 +392,19 @@ class JobRuntime:
             self.close_active()
             self.redraw_ui(force=True)
 
-    def update_ui(self, context, progress, message):
+    def update_ui(self, context, progress, message, *, message_args=None, phase=None):
         progress = min(max(float(progress), 0.0), 1.0)
         message = str(message)
-        state = (id(self.active_job), progress, message)
+        message_args = dict(message_args or {})
+        phase = dict(phase) if phase is not None else None
+        state = (id(self.active_job), progress, message, message_args, phase)
         if self._ui_state == state:
             return
         self._ui_state = state
         self.progress = progress
         self.message = message
+        self._progress_message_args = message_args
+        self._progress_phase = phase
         window_manager = getattr(context, "window_manager", None)
         if self.active_job is not None and window_manager is not None and hasattr(
             window_manager, "progress_update"

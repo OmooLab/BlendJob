@@ -68,7 +68,10 @@ def test_response_runs_after_completion_and_before_cleanup(invocation, tmp_path,
     assert runtime.progress == 1.0
     assert not resource.exists()
     operator.cleanup.assert_called_once_with()
-    operator.report.assert_not_called()
+    if error_type:
+        operator.report.assert_not_called()
+    else:
+        operator.report.assert_called_once_with({"INFO"}, "Blender result applied")
     context.window_manager.event_timer_remove.assert_called_once_with(timer)
 
     next_operator = type(operator)()
@@ -169,3 +172,31 @@ def test_ui_teardown_errors_release_job_and_resources(invocation, outcome, faili
     controller.cancel.assert_not_called()
     next_operator.modal(context, SimpleNamespace(type="TIMER"))
     assert runtime.active_job is None
+
+
+@pytest.mark.parametrize("message", [None, "", "Result applied"])
+def test_response_message_is_optional_and_report_does_not_change_job_state(invocation, message):
+    runtime, controller, operator, context = invocation
+    operator.response = Mock(return_value=message)
+    assert operator.execute(context) == {"RUNNING_MODAL"}
+    assert operator.modal(context, SimpleNamespace(type="TIMER")) == {"FINISHED"}
+    assert runtime.active_job is None
+    assert runtime.message == "Server complete"
+    if message:
+        operator.report.assert_called_once_with({"INFO"}, message)
+    else:
+        operator.report.assert_not_called()
+    operator.cleanup.assert_called_once_with()
+
+
+def test_report_failure_keeps_job_finished_and_cleans_up(invocation):
+    runtime, controller, operator, context = invocation
+    operator.response = Mock(return_value="Result applied")
+    operator.report.side_effect = RuntimeError("Report unavailable")
+    operator.execute(context)
+    with pytest.raises(RuntimeError, match="Report unavailable"):
+        operator.modal(context, SimpleNamespace(type="TIMER"))
+    assert runtime.active_job is None
+    controller.mark_job_complete.assert_called_once_with("first")
+    operator.cleanup.assert_called_once_with()
+    assert type(operator)().execute(context) == {"RUNNING_MODAL"}

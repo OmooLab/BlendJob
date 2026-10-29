@@ -40,22 +40,63 @@ Handlers commonly use these context members:
 | `job_type` | Type of the current job |
 | `storage_root` | Persistent root configured by the Runtime |
 | `directory` | Dedicated directory for the current job |
-| `progress(value, message)` | Publish progress from 0.0 to 1.0 with display text |
+| `progress(value, message, **message_args)` | Publish progress from 0.0 to 1.0, a message template, and its parameters |
 | `check_cancelled()` | Respond to cancellation at a safe checkpoint |
 | `resource(name)` | Get a Server Resource |
 | `log(message, level="INFO")` | Write Handler details to the current Job's `job.log` |
 
 BlendJob maintains the `queued`, `running`, `cancelling`, `succeeded`, `failed`, and `cancelled` states from Handler execution.
 
-## Report progress
+## Progress and translation
+
+Handlers use English message templates and pass dynamic values as keyword arguments:
 
 ```python
-context.progress(0.05, "Loading input")
-context.progress(0.40, "Running inference")
-context.progress(0.90, "Saving output")
+context.progress(0.1, "Preparing image")
+context.progress(
+    0.5,
+    "Processing image {index}/{total}",
+    index=3,
+    total=6,
+)
+context.progress(1.0, "Processing complete")
 ```
 
-The Runtime displays the latest progress and message in Blender's status bar. UI progress remains monotonic for one job.
+Keep the messages in the add-on's regular Blender translation table in `translations.py`:
+
+```python
+TRANSLATIONS = {
+    "zh_HANS": {
+        ("*", "Preparing image"): "正在准备图像",
+        ("*", "Processing image {index}/{total}"): "正在处理图像 {index}/{total}",
+        ("*", "Processing complete"): "处理完成",
+    },
+}
+```
+
+`"*"` is Blender's default translation context. Keep the same parameter names in each translation, such as `{index}` and `{total}`.
+
+Merge translation registration into the add-on's existing `register()` and `unregister()` functions:
+
+```python
+import bpy
+
+from .translations import TRANSLATIONS
+
+
+def register():
+    bpy.app.translations.register(__package__, TRANSLATIONS)
+    # Register the add-on's classes and runtime here.
+
+
+def unregister():
+    # Unregister the runtime and classes here.
+    bpy.app.translations.unregister(__package__)
+```
+
+Add-ons with an existing translation table only need to add the entries. `JobRuntime` uses Blender's `pgettext_iface()` to translate the template before filling in parameters at display time, following the current interface language and interface translation setting.
+
+Pass fixed text directly. Keep parameterized templates intact and let the Runtime format them. The latest progress appears in Blender's status bar, and UI progress remains monotonic for one job.
 
 ## Respond to cancellation
 
