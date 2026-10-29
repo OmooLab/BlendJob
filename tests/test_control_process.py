@@ -151,7 +151,7 @@ def test_setup_transfers_running_server_and_directory_lock(runtime, tmp_path, ne
     source = runtime.storage_root()
     target = tmp_path / "prepared" if new_location else source
     if new_location:
-        shutil.copytree(source, target)
+        shutil.copytree(source, target, symlinks=True)
     current = source
     validated = []
 
