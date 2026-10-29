@@ -69,7 +69,7 @@ class ControlProcess:
         state = read_json(self.directory / f"status-{identifier}.json")
         if self.process.poll() is not None and state.get("state") not in TERMINAL_STATES:
             raise RuntimeError(f"BlendJob control process exited; log: {self.directory / 'control.log'}")
-        return state or {"state": "running", "progress": 0.0, "message": "Starting task"}
+        return state or {"state": "running", "progress": 0.0, "message": "Starting job"}
 
     def cancel(self, identifier):
         if self.directory is not None:

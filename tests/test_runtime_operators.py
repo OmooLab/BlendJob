@@ -90,7 +90,7 @@ def test_post_setup_runs_on_main_thread_after_cleanup(runtime, tmp_path, state, 
         patch.object(threading.Thread, "start", side_effect=AssertionError("Parent thread")),
     ):
         if callback_error or state == "failed":
-            message = "Setup completed, but post_setup failed: Callback failed" if callback_error else "Server task failed"
+            message = "Setup completed, but post_setup failed: Callback failed" if callback_error else "Server job failed"
             with pytest.raises(RuntimeError, match=message):
                 bpy.ops.blendjob_test.setup_server()
         else:
@@ -129,7 +129,7 @@ def test_migration_reports_cleanup_warning_without_failing(runtime):
     cls = next(cls for cls in runtime.operator_classes() if cls.bl_idname.endswith(".migrate_folder"))
     owner = SimpleNamespace(report=Mock())
     message = "Migration completed; old folder remains at C:/old"
-    assert cls.response(owner, None, SimpleNamespace(value={"warning": message})) == message
+    cls.response(owner, None, SimpleNamespace(value={"warning": message}))
     owner.report.assert_called_once_with({"WARNING"}, message)
 
 

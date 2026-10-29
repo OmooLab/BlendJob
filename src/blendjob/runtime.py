@@ -3,6 +3,7 @@ from pathlib import Path
 from .configuration import ServerConfiguration
 from .process import ProcessServer, ActionController
 from .operator import JobOperatorBase
+from .translations import TRANSLATIONS, translate_progress
 from .maintenance import MaintenanceController, SetupController, MigrateController
 
 
@@ -27,6 +28,7 @@ class JobRuntime:
         if not isinstance(namespace, str) or not namespace.strip():
             raise ValueError("namespace must be a non-empty string")
         self.namespace = namespace.strip()
+        self._translation_key = f"{__package__}.{self.namespace}"
         self.active_job = None
         self.progress = 0.0
         self.message = "Ready"
@@ -37,6 +39,15 @@ class JobRuntime:
         self._status_bar_draw = self._create_status_bar_draw()
         self.server = ProcessServer(self)
         self.JobOperatorBase = self.operator_base()
+
+    @property
+    def message(self):
+        """Translate built-in progress text in the current interface language."""
+        return translate_progress(self._progress_message)
+
+    @message.setter
+    def message(self, value):
+        self._progress_message = str(value)
 
     def setup_controller(self, target=None, *, mirror=False, online=True):
         """Install and validate an environment, then save its location."""
@@ -173,8 +184,6 @@ class JobRuntime:
                 warning = (result.value or {}).get("warning")
                 if warning:
                     self.report({"WARNING"}, warning)
-                    return warning
-                return "Folder migration completed"
 
         class ClearJobFiles(operator_base, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.clear_job_files"
@@ -201,7 +210,10 @@ class JobRuntime:
 
             def draw(self, _context):
                 preview = self._preview
-                self.layout.label(text=f"Delete {len(preview['jobs'])} jobs ({preview['bytes'] / 1_000_000:.1f} MB)?")
+                message = bpy.app.translations.pgettext_iface("Delete {count} jobs ({size} MB)?").format(
+                    count=len(preview["jobs"]), size=f"{preview['bytes'] / 1_000_000:.1f}",
+                )
+                self.layout.label(text=message, translate=False)
                 self.layout.label(text="Permanently delete job outputs and logs.")
 
             def execute(self, context):
@@ -219,11 +231,12 @@ class JobRuntime:
                         self.report({"INFO"}, "No unused job files to clear")
                     else:
                         context.window_manager.invoke_props_dialog(self, width=460, confirm_text="Delete Files")
-                    return "Job files inspected"
+                    return
                 kept = value["skipped"] + len(value["failed"])
-                message = f"Deleted {len(value['jobs'])} jobs ({value['bytes'] / 1_000_000:.1f} MB); kept {kept}"
+                message = bpy.app.translations.pgettext_iface(
+                    "Deleted {count} jobs ({size} MB); kept {kept}"
+                ).format(count=len(value["jobs"]), size=f"{value['bytes'] / 1_000_000:.1f}", kept=kept)
                 self.report({"WARNING"} if kept else {"INFO"}, message)
-                return message
 
         class CancelJob(bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.cancel_job"
@@ -310,6 +323,7 @@ class JobRuntime:
 
         for class_type in self.operator_classes():
             bpy.utils.register_class(class_type)
+        bpy.app.translations.register(self._translation_key, TRANSLATIONS)
         self._ensure_status_bar_draw()
         self._registered = True
         self.enable()
@@ -323,11 +337,12 @@ class JobRuntime:
         self._remove_status_bar_draw()
         for class_type in reversed(self.operator_classes()):
             bpy.utils.unregister_class(class_type)
+        bpy.app.translations.unregister(self._translation_key)
         self._registered = False
 
     def begin_job(self, job):
         if self.active_job is not None:
-            raise RuntimeError("Another task is running")
+            raise RuntimeError("Another job is running")
         self.active_job = job
 
     def finish_job(self, job):
@@ -336,11 +351,8 @@ class JobRuntime:
         except (OSError, RuntimeError):
             pass
         finally:
-            try:
-                job.operator.cleanup()
-            finally:
-                if self.active_job is job:
-                    self.active_job = None
+            if self.active_job is job:
+                self.active_job = None
 
     def cancel_active(self):
         job = self.active_job
@@ -357,7 +369,10 @@ class JobRuntime:
     def close_active(self):
         job = self.active_job
         if job is not None:
-            self.finish_job(job)
+            try:
+                self.finish_job(job)
+            finally:
+                job.operator.cleanup()
 
     def stop(self):
         self.cancel_active()
@@ -377,7 +392,7 @@ class JobRuntime:
         self.progress = progress
         self.message = message
         window_manager = getattr(context, "window_manager", None)
-        if window_manager is not None and hasattr(
+        if self.active_job is not None and window_manager is not None and hasattr(
             window_manager, "progress_update"
         ):
             window_manager.progress_update(int(self.progress * 100))

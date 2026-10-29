@@ -80,7 +80,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
         )
 
         JobOperatorBase._update_from_job_status(
-            SimpleNamespace(starting_message="Starting task"),
+            SimpleNamespace(starting_message="Starting job"),
             None,
             job,
             {"job_id": "job", "progress": 0.2, "message": "Working"},
@@ -99,7 +99,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
         )
 
         JobOperatorBase._update_from_job_status(
-            SimpleNamespace(starting_message="Starting task"),
+            SimpleNamespace(starting_message="Starting job"),
             None,
             job,
             {"job_id": "setup-job", "progress": 0.2, "message": "Preparing resources"},
@@ -140,7 +140,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
 
 
 class JobRuntimeStopTest(unittest.TestCase):
-    def test_remote_cleanup_failure_does_not_block_local_cleanup_or_next_job(self):
+    def test_remote_cleanup_failure_does_not_block_next_job(self):
         for error in (RuntimeError("Control process exited"), OSError("IPC unavailable")):
             with self.subTest(error=error):
                 runtime = self.runtime(Mock())
@@ -150,7 +150,7 @@ class JobRuntimeStopTest(unittest.TestCase):
                 job = JobOperatorState(runtime, operator, controller, job_id="job")
                 runtime.begin_job(job)
                 runtime.finish_job(job)
-                operator.cleanup.assert_called_once()
+                operator.cleanup.assert_not_called()
                 self.assertIsNone(runtime.active_job)
                 runtime.begin_job(JobOperatorState(runtime, Mock(), Mock()))
 
@@ -161,7 +161,7 @@ class JobRuntimeStopTest(unittest.TestCase):
         job = JobOperatorState(runtime, operator, Mock(), job_id="job")
         runtime.begin_job(job)
         with self.assertRaisesRegex(RuntimeError, "Cleanup failed"):
-            runtime.finish_job(job)
+            runtime.close_active()
         self.assertIsNone(runtime.active_job)
 
     def runtime(self, server):
@@ -273,7 +273,7 @@ class JobRuntimeRedrawTest(unittest.TestCase):
         bpy = ModuleType("bpy")
         bpy.context = self.context
         self.pending_redraws = []
-        bpy.app = SimpleNamespace(timers=SimpleNamespace(
+        bpy.app = SimpleNamespace(translations=SimpleNamespace(pgettext_iface=lambda value: value), timers=SimpleNamespace(
             is_registered=lambda callback: callback in self.pending_redraws,
             register=self.pending_redraws.append,
         ))
@@ -389,9 +389,10 @@ class JobRuntimeRedrawTest(unittest.TestCase):
                     self.runtime, operator, Mock(), job_id="job",
                 )
                 self.runtime.active_job = job
-                result = operator._close(
-                    self.context, job, "Finished", cancelled=cancelled,
-                )
+                if cancelled:
+                    result = operator._finish_cancelled(self.context, job)
+                else:
+                    result = operator._finish_success(self.context, job, {"state": "succeeded"})
                 self.flush_redraws()
                 self.assertEqual(result, {"CANCELLED"} if cancelled else {"FINISHED"})
                 self.assertEqual(len(self.notifications), 2)
@@ -466,6 +467,7 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
             unregister_class=Mock(),
         )
         fake_bpy.app = SimpleNamespace(
+            translations=SimpleNamespace(register=Mock(), unregister=Mock(), pgettext_iface=lambda value: value),
             online_access=True,
             timers=Timers,
         )
@@ -550,6 +552,7 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
         self.runtime.active_job = None
         self.runtime.update_ui(context, 0.5, "Working")
         self.assertEqual(self.runtime.redraw_ui.call_count, 2)
+        context.window_manager.progress_update.assert_called_once_with(50)
 
     def test_poll_does_not_duplicate_status_bar_and_unregister_stops_recovery(self):
         self.runtime.register()

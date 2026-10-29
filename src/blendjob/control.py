@@ -45,7 +45,7 @@ class ControlService:
         try:
             if self.cancelled(identifier):
                 raise RuntimeError("Operation cancelled")
-            self.publish(identifier, {"state": "running", "progress": 0.0, "message": "Starting task"})
+            self.publish(identifier, {"state": "running", "progress": 0.0, "message": "Starting job"})
             if action == "job":
                 result = self.job(identifier, parameters)
             elif action in {"setup", "migrate"}:

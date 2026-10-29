@@ -135,7 +135,7 @@ def wait_for(controller, job_id, predicate=lambda state: state.get("state") in T
         if predicate(state):
             return state
         time.sleep(0.025)
-    raise AssertionError(f"Task did not finish: {state}")
+    raise AssertionError(f"Job did not finish: {state}")
 
 
 def wait_until(predicate):

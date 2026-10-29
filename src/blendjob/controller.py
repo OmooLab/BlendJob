@@ -207,7 +207,7 @@ class ServerController:
                     client.cancel(job_id)
                 if cancellation_deadline is not None and time.monotonic() >= cancellation_deadline:
                     self.stop()
-                    status = {**submitted, "state": "cancelled", "message": "Task cancelled"}
+                    status = {**submitted, "state": "cancelled", "message": "Job cancelled"}
                 else:
                     status = {**submitted, **client.status(job_id)}
                     self.snapshot = {**self.snapshot, "state": "BUSY", "busy": True,

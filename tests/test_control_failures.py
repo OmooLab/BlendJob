@@ -11,7 +11,7 @@ from blendjob.process import ControlProcess
 from blendjob.storage import write_json
 
 
-@pytest.mark.parametrize("failure", ["task", "poll"])
+@pytest.mark.parametrize("failure", ["job", "poll"])
 def test_worker_failure_exits_control_process_and_reports_error(tmp_path, failure):
     entrypoint = tmp_path / "app.py"
     entrypoint.touch()
@@ -20,7 +20,7 @@ def test_worker_failure_exits_control_process_and_reports_error(tmp_path, failur
         "storage_root": str(tmp_path / "storage"), "parent_pid": os.getpid(),
     })
     identifier = "a" * 32
-    if failure == "task":
+    if failure == "job":
         write_json(tmp_path / "command-00000001.json", {
             "id": identifier, "sequence": 1, "action": "start", "parameters": {},
         })
@@ -31,7 +31,7 @@ from blendjob.control import ControlService
 service = ControlService(sys.argv[2])
 def fail(*args):
     raise OSError('Injected IPC write failure')
-if sys.argv[3] == 'task':
+if sys.argv[3] == 'job':
     service.publish = fail
 else:
     service.publish_server = fail

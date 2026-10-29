@@ -51,7 +51,7 @@ class JobOperatorBase:
 
     bl_options = {"INTERNAL"}
     poll_interval = 0.25
-    starting_message = "Starting task"
+    starting_message = "Starting job"
     job_runtime = None
     job_type = ""
 
@@ -81,7 +81,7 @@ class JobOperatorBase:
     def execute(self, context):
         runtime = self._runtime()
         if runtime.active_job is not None:
-            self.report({"WARNING"}, "Another task is running")
+            self.report({"WARNING"}, "Another job is running")
             return {"CANCELLED"}
         if not self.job_type:
             self.report({"ERROR"}, "Set job_type on the Job Operator")
@@ -116,67 +116,69 @@ class JobOperatorBase:
 
     def modal(self, context, event):
         runtime = self._runtime()
+        job = runtime.active_job
+        if job is None or job.operator is not self:
+            self._remove_job_timer(context)
+            return {"CANCELLED"}
         if event.type == "ESC":
             runtime.cancel_active()
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
-
-        job = runtime.active_job
-        if job is None:
-            self._remove_job_timer(context)
-            return {"CANCELLED"}
         if job.cancelled and not job.job_id:
-            return self._close(context, job, "Task cancelled", cancelled=True)
+            return self._finish_cancelled(context, job)
 
         try:
             status = job.controller.status(job.job_id)
         except RuntimeError as error:
             return self._finish_failure(context, job, error)
-        self._update_from_job_status(context, job, status)
         state = status.get("state")
         if state == "succeeded":
             return self._finish_success(context, job, status)
         if state in {"failed", "cancelled"}:
             if job.cancelled or state == "cancelled":
-                return self._close(context, job, "Task cancelled", cancelled=True)
+                return self._finish_cancelled(context, job)
             return self._finish_failure(
                 context,
                 job,
-                status.get("error") or "Server task failed",
+                status.get("error") or "Server job failed",
             )
+        self._update_from_job_status(context, job, status)
         return {"RUNNING_MODAL"}
 
     def _finish_success(self, context, job, status):
         try:
-            complete_status = {
+            self._end_job(context, job, status.get("message") or "Job complete", cancelled=False)
+            result = JobResult._from_status({
                 "job_id": job.job_id,
                 "directory": str(job.directory),
                 **status,
-            }
-            message = self.response(
-                context,
-                JobResult._from_status(complete_status),
-            )
-        except (OSError, RuntimeError, TypeError, ValueError) as error:
-            return self._finish_failure(context, job, error)
-        return self._close(
-            context,
-            job,
-            message or status.get("message") or "Task complete",
-            cancelled=False,
-        )
+            })
+            self.response(context, result)
+            return {"FINISHED"}
+        finally:
+            self.cleanup()
 
     def _finish_failure(self, context, job, error):
-        self.report({"ERROR"}, str(error))
-        return self._close(context, job, "Task failed", cancelled=True)
+        try:
+            return self._finish_cancelled(context, job, "Job failed")
+        finally:
+            self.report({"ERROR"}, str(error))
 
-    def _close(self, context, job, message, *, cancelled):
-        self._remove_job_timer(context)
-        if hasattr(context.window_manager, "progress_end"):
-            context.window_manager.progress_end()
+    def _finish_cancelled(self, context, job, message="Job cancelled"):
+        try:
+            self._end_job(context, job, message, cancelled=True)
+            return {"CANCELLED"}
+        finally:
+            self.cleanup()
+
+    def _end_job(self, context, job, message, *, cancelled):
         job.runtime.finish_job(job)
+        try:
+            self._remove_job_timer(context)
+        finally:
+            if hasattr(context.window_manager, "progress_end"):
+                context.window_manager.progress_end()
         job.runtime.update_ui(context, 0.0 if cancelled else 1.0, message)
-        return {"CANCELLED"} if cancelled else {"FINISHED"}
 
     def _update_from_job_status(self, context, job, status):
         reported = min(max(float(status.get("progress", job.progress)), 0.0), 1.0)
@@ -193,20 +195,17 @@ class JobOperatorBase:
         timer = getattr(self, "_timer", None)
         if timer is None:
             return
-        context.window_manager.event_timer_remove(timer)
         self._timer = None
+        context.window_manager.event_timer_remove(timer)
 
     def cancel(self, context):
         runtime = self._runtime()
         job = runtime.active_job
-        runtime.cancel_active()
-        self._remove_job_timer(context)
-        if job is None:
+        if job is None or job.operator is not self:
+            self._remove_job_timer(context)
             return
-        if hasattr(context.window_manager, "progress_end"):
-            context.window_manager.progress_end()
-        runtime.finish_job(job)
-        runtime.update_ui(context, 0.0, "Task cancelled")
+        runtime.cancel_active()
+        self._finish_cancelled(context, job)
 
     def _runtime(self):
         if self.job_runtime is None:

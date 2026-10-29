@@ -67,7 +67,7 @@ class JobContext:
             "job_type": job_type,
             "state": "queued",
             "progress": 0.0,
-            "message": "Task queued",
+            "message": "Job queued",
             "directory": str(self.directory),
         }
 
@@ -110,7 +110,7 @@ class JobContext:
             return False
         return True
 
-    def _succeed(self, result=None, message="Task complete"):
+    def _succeed(self, result=None, message="Job complete"):
         self._update(1.0, message, state="succeeded", result=result)
 
     def _snapshot(self):
@@ -125,7 +125,7 @@ class JobContext:
             self._status = {
                 **self._status,
                 "state": "cancelling",
-                "message": "Cancelling task",
+                "message": "Cancelling job",
             }
             return True
 
@@ -135,7 +135,7 @@ class JobContext:
 
     def check_cancelled(self):
         if self._is_cancelled():
-            raise JobCancelled("Task cancelled")
+            raise JobCancelled("Job cancelled")
 
     def resource(self, name):
         """Return a shared resource registered on the owning JobServer."""
@@ -328,7 +328,7 @@ class JobServer:
                 self.futures.pop(job_id, None)
                 context.log("Cancelled before execution", level="WARNING")
                 self._log_job(context, "cancelled before execution")
-                context._update(1.0, "Task cancelled", state="cancelled")
+                context._update(1.0, "Job cancelled", state="cancelled")
                 return context
         if not context._request_cancel():
             return None
@@ -358,7 +358,7 @@ class JobServer:
             if context._snapshot()["state"] in TERMINAL_STATES:
                 return
             self.active_job_id = context.job_id
-        context._update(0.0, "Server accepted the task", state="running")
+        context._update(0.0, "Server accepted the job", state="running")
         context.log("Started")
         self._log_job(context, "started")
         try:
@@ -374,12 +374,12 @@ class JobServer:
                 self._log_job(context, "succeeded")
                 context._succeed(
                     result,
-                    message=snapshot.get("message") or "Task complete",
+                    message=snapshot.get("message") or "Job complete",
                 )
         except JobCancelled:
             context.log("Cancelled", level="WARNING")
             self._log_job(context, "cancelled")
-            context._update(1.0, "Task cancelled", state="cancelled")
+            context._update(1.0, "Job cancelled", state="cancelled")
         except Exception as error:
             context.log(
                 (
@@ -392,7 +392,7 @@ class JobServer:
                 context,
                 f"failed: {type(error).__name__}: {error}",
             )
-            context._update(1.0, "Task failed", error=error, state="failed")
+            context._update(1.0, "Job failed", error=error, state="failed")
         finally:
             with self.lock:
                 if self.active_job_id == context.job_id:
