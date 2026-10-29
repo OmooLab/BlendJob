@@ -4,7 +4,6 @@ import shutil
 import queue
 import subprocess
 import sys
-import sysconfig
 import threading
 import time
 import venv
@@ -106,7 +105,8 @@ def ignore_cancel(context, parameters):
     environment = root / ".venv"
     venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
     site = environment / ("Lib/site-packages" if os.name == "nt" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
-    (site / "test-dependencies.pth").write_text(sysconfig.get_path("purelib") + "\n", encoding="utf-8")
+    dependencies = [path for path in sys.path if Path(path).name == "site-packages"]
+    (site / "test-dependencies.pth").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
     from blendjob.environment import environment_python
     probe = subprocess.run(
         [str(environment_python(root)), "-I", "-c",
