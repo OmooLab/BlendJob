@@ -50,6 +50,30 @@ class StorageMigrationTest(unittest.TestCase):
         migration.cleanup_source()
         self.assertFalse(self.source.exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX virtual environment directory links")
+    def test_migration_preserves_internal_directory_links(self):
+        (self.source / "lib64").symlink_to("data", target_is_directory=True)
+        (self.source / "root").symlink_to(".", target_is_directory=True)
+        migration = self.migration()
+        migration.copy()
+        migration.cleanup_source()
+        self.assertTrue((self.target / "lib64").is_symlink())
+        self.assertEqual((self.target / "lib64/sample.bin").read_bytes(), b"sample contents")
+        self.assertEqual((self.target / "root").resolve(), self.target)
+
+    @unittest.skipIf(os.name == "nt", "POSIX directory links")
+    def test_migration_rejects_external_directory_links(self):
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("keep")
+        (self.source / "external").symlink_to(outside, target_is_directory=True)
+        migration = self.migration()
+        with self.assertRaisesRegex(ValueError, "External directory links"):
+            migration.copy()
+        migration.discard_copy()
+        self.assertEqual((outside / "keep").read_text(), "keep")
+        self.assertTrue(self.source.exists())
+
     def test_conflicts_and_nested_targets_preserve_existing_data(self):
         self.target.mkdir(parents=True)
         (self.target / "keep").write_text("keep")

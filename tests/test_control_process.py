@@ -104,7 +104,7 @@ def ignore_cancel(context, parameters):
 ''', encoding="utf-8")
     root = tmp_path / "storage"
     environment = root / ".venv"
-    venv.EnvBuilder(with_pip=False).create(environment)
+    venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
     site = environment / ("Lib/site-packages" if os.name == "nt" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
     (site / "test-dependencies.pth").write_text(sysconfig.get_path("purelib") + "\n", encoding="utf-8")
     from blendjob.environment import environment_python

@@ -146,9 +146,15 @@ class StorageMigration:
         directories = []
         for directory, dirs, names in os.walk(self.source):
             directories.append(Path(directory).relative_to(self.source))
-            for name in dirs:
+            for name in dirs[:]:
                 entry = Path(directory) / name
-                if entry.is_symlink() or getattr(entry.stat(), "st_file_attributes", 0) & 0x400:
+                if entry.is_symlink():
+                    link = entry.resolve()
+                    if link != self.source and self.source not in link.parents:
+                        raise ValueError(f"External directory links cannot be migrated: {entry}")
+                    dirs.remove(name)
+                    files.append(entry)
+                elif getattr(entry.stat(), "st_file_attributes", 0) & 0x400:
                     raise ValueError(f"Linked directories cannot be migrated: {entry}")
             files.extend((Path(directory) / name for name in names))
         total = sum(path.stat().st_size for path in files)
@@ -164,9 +170,9 @@ class StorageMigration:
             destination = self.target / relative
             if path.is_symlink():
                 link = path.resolve()
-                if self.source in link.parents:
+                if link == self.source or self.source in link.parents:
                     link = self.target / link.relative_to(self.source)
-                destination.symlink_to(link)
+                destination.symlink_to(link, target_is_directory=path.is_dir())
                 continue
             digest = hashlib.sha256()
             with path.open("rb") as reader, destination.open("wb") as writer:
