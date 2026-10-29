@@ -6,7 +6,7 @@ import shutil
 import stat
 import sys
 import tempfile
-import threading
+import time
 from pathlib import Path
 
 def read_json(path):
@@ -22,7 +22,14 @@ def write_json(path, data):
     path = Path(path)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(20):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.005)
 
 
 def file_checksum(path, cancel_check=lambda: False):
@@ -70,40 +77,37 @@ class StorageLock:
     def __init__(self):
         self.stream = None
         self.root = None
-        self.mutex = threading.Lock()
 
     def acquire(self, root):
         root = Path(root).resolve()
-        with self.mutex:
-            if self.stream is not None:
-                if self.root != root:
-                    raise RuntimeError("Another Server Location is in use")
-                return
-            path = storage_state_path(root, "lock")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            stream = path.open("a+b")
-            try:
-                stream.seek(0)
-                if not stream.read(1):
-                    stream.write(b"0")
-                    stream.flush()
-                stream.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as error:
-                stream.close()
-                raise RuntimeError(f"Another Blender process is using {root}") from error
-            self.stream, self.root = stream, root
+        if self.stream is not None:
+            if self.root != root:
+                raise RuntimeError("Another Server Location is in use")
+            return
+        path = storage_state_path(root, "lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stream = path.open("a+b")
+        try:
+            stream.seek(0)
+            if not stream.read(1):
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            stream.close()
+            raise RuntimeError(f"Another Blender process is using {root}") from error
+        self.stream, self.root = stream, root
 
     def release(self):
-        with self.mutex:
-            if self.stream is not None:
-                self.stream.close()
-                self.stream, self.root = None, None
+        if self.stream is not None:
+            self.stream.close()
+            self.stream, self.root = None, None
 
 
 def remove_server_directory(path):

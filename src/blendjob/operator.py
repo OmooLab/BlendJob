@@ -1,9 +1,8 @@
 import json
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from .client import JobResult
+from .result import JobResult
 
 
 @dataclass
@@ -15,10 +14,7 @@ class JobOperatorState:
     controller: object
     job_id: str = ""
     directory: Path | None = None
-    started: bool = False
     cancelled: bool = False
-    start_error: str = ""
-    start_thread: threading.Thread | None = None
     progress_job_id: str = ""
     progress: float = 0.0
 
@@ -110,28 +106,13 @@ class JobOperatorBase:
             window=context.window,
         )
         context.window_manager.modal_handler_add(self)
-        job.start_thread = threading.Thread(
-            target=self._submit_job,
-            args=(job, parameters),
-            name="BlendJobSubmit",
-            daemon=True,
-        )
-        job.start_thread.start()
-        return {"RUNNING_MODAL"}
-
-    def _submit_job(self, job, parameters):
-        if job.cancelled:
-            job.started = True
-            return
         try:
-            submitted = job.controller.submit(self.job_type, parameters)
+            submitted = controller.submit(self.job_type, parameters)
             job.job_id = submitted["job_id"]
             job.directory = Path(submitted["directory"])
-            job.started = True
-            if job.cancelled:
-                job.controller.cancel(job.job_id)
         except (KeyError, OSError, RuntimeError, TypeError) as error:
-            job.start_error = str(error)
+            return self._finish_failure(context, job, error)
+        return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         runtime = self._runtime()
@@ -144,11 +125,6 @@ class JobOperatorBase:
         if job is None:
             self._remove_job_timer(context)
             return {"CANCELLED"}
-        if job.start_error:
-            self.report({"ERROR"}, f"Unable to start task: {job.start_error}")
-            return self._close(context, job, "Task failed to start", cancelled=True)
-        if not job.started:
-            return {"RUNNING_MODAL"}
         if job.cancelled and not job.job_id:
             return self._close(context, job, "Task cancelled", cancelled=True)
 

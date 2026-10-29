@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from blendjob import JobServer
+from blendjob.server import JobServer
 
 
 @pytest.fixture

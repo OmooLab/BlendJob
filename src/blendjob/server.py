@@ -508,8 +508,11 @@ class JobServer:
             parameters = payload.get("parameters")
             if not job_type or not isinstance(parameters, dict):
                 raise HTTPException(status_code=422, detail="Invalid job request")
+            requested_id = payload.get("job_id")
+            if requested_id is not None and (not isinstance(requested_id, str) or not re.fullmatch(r"[0-9a-f]{32}", requested_id)):
+                raise HTTPException(status_code=422, detail="Invalid job id")
             try:
-                context = self.submit(job_type, parameters)
+                context = self.submit(job_type, parameters, job_id=payload.get("job_id"))
             except KeyError:
                 raise HTTPException(status_code=422, detail="Unknown job type")
             except ValueError as error:
@@ -551,32 +554,3 @@ class JobServer:
             return {"state": "stopping"}
 
         return app
-
-
-def watch_parent(parent_pid, shutdown_event, interval=1.0):
-    """Stop a dedicated Server after its owning Blender process exits."""
-    if not parent_pid:
-        return
-    while not shutdown_event.wait(interval):
-        if not _process_exists(parent_pid):
-            shutdown_event.set()
-            return
-
-
-def _process_exists(process_id):
-    if os.name != "nt":
-        try:
-            os.kill(process_id, 0)
-            return True
-        except OSError:
-            return False
-    import ctypes
-
-    synchronize = 0x00100000
-    handle = ctypes.windll.kernel32.OpenProcess(synchronize, False, process_id)
-    if not handle:
-        return False
-    try:
-        return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == 0x00000102
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)

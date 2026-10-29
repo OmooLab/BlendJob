@@ -2,14 +2,13 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from blendjob import storage
-from blendjob.runtime import JobRuntime
+from blendjob.configuration import ServerConfiguration
+from blendjob.control_maintenance import SetupOperation, MigrateOperation
 
 
 class StorageMigrationTest(unittest.TestCase):
@@ -28,55 +27,19 @@ class StorageMigrationTest(unittest.TestCase):
         (self.source / "empty").mkdir()
         entrypoint = self.base / "app.py"
         entrypoint.touch()
-        self.runtime = JobRuntime(f"{entrypoint}:server", storage_root=self.source,
-                                  environment={"python": "3.12"}, namespace="test")
+        self.config = ServerConfiguration(f"{entrypoint}:server", {"python": "3.12"})
+        self.server = self.config.server_controller(self.source)
+        self.current = self.source
+
+    def save_location(self, target):
+        self.current = target
+
+    def operation(self, kind, target, **options):
+        return kind(self.config, self.source, target, stop_server=self.server.stop,
+                    save_location=self.save_location, **options)
 
     def migration(self, cancel=lambda: False):
         return storage.StorageMigration(self.source, self.target, Mock(), cancel)
-
-    def run_job(self, job):
-        job.submit("migrate", {})
-        deadline = time.monotonic() + 5
-        while job.status("")["state"] not in {"succeeded", "failed", "cancelled"}:
-            if time.monotonic() >= deadline:
-                job.cancel("")
-                self.fail("Maintenance did not finish")
-            time.sleep(0.005)
-        job.mark_job_complete("")
-        return job.status("")
-
-    def test_migration_is_busy_while_server_stops_in_background(self):
-        from blendjob.operator import JobOperatorState
-        stopping = threading.Event()
-        release = threading.Event()
-        main_thread = threading.get_ident()
-
-        def stop():
-            self.assertNotEqual(threading.get_ident(), main_thread)
-            stopping.set()
-            if not release.wait(5):
-                raise RuntimeError("Test did not release Server shutdown")
-
-        with patch.object(self.runtime.server, "stop", side_effect=stop) as stop_server:
-            controller = self.runtime.migrate_controller(self.target)
-            stop_server.assert_not_called()
-            job = JobOperatorState(self.runtime, Mock(), controller)
-            self.runtime.begin_job(job)
-            with patch.object(controller, "perform") as perform:
-                try:
-                    controller.submit("migrate", {})
-                    self.assertTrue(stopping.wait(2))
-                    self.assertTrue(self.runtime.server_busy())
-                    self.assertTrue(self.runtime.maintenance_busy())
-                    self.assertEqual(controller.status("")["message"], "Stopping Server")
-                    perform.assert_not_called()
-                    controller.cancel("")
-                finally:
-                    release.set()
-                    self.runtime.finish_job(job)
-                perform.assert_not_called()
-            self.assertIsNone(self.runtime.active_job)
-            self.assertEqual(controller.status("")["state"], "cancelled")
 
     def test_copy_verifies_contents_and_preserves_empty_directories(self):
         migration = self.migration()
@@ -99,24 +62,23 @@ class StorageMigrationTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 storage.StorageMigration(self.source, target, Mock(), lambda: False)
 
-    def test_save_runs_on_polling_thread_before_source_removal(self):
-        main_thread = threading.get_ident()
+    def test_save_completes_before_source_removal(self):
         current = self.source
         def location(target=None):
             nonlocal current
             if target is None:
                 return current
-            self.assertEqual(threading.get_ident(), main_thread)
             self.assertTrue(self.source.exists())
             self.assertTrue((target / "data/sample.bin").is_file())
             current = target
+            self.current = target
             return current
-        self.runtime.storage_root_setting = location
-        job = self.runtime.migrate_controller(self.target)
+        self.save_location = location
+        job = self.operation(MigrateOperation, self.target)
         with patch.object(job, "validate"):
-            status = self.run_job(job)
+            status = job.run()
         self.assertEqual(status["state"], "succeeded")
-        self.assertEqual(self.runtime.storage_root(), self.target)
+        self.assertEqual(self.current, self.target)
         self.assertFalse(self.source.exists())
 
     def test_save_failure_discards_copy_and_preserves_source(self):
@@ -124,50 +86,59 @@ class StorageMigrationTest(unittest.TestCase):
             if target is not None:
                 raise RuntimeError("save failed")
             return self.source
-        self.runtime.storage_root_setting = location
-        job = self.runtime.migrate_controller(self.target)
+        self.save_location = location
+        job = self.operation(MigrateOperation, self.target)
         with patch.object(job, "validate"):
-            status = self.run_job(job)
+            status = job.run()
         self.assertEqual(status["state"], "failed")
         self.assertIn("save failed", status["error"])
         self.assertTrue(self.source.exists())
         self.assertFalse(self.target.exists())
-        self.assertEqual(self.runtime.storage_root(), self.source)
+        self.assertEqual(self.current, self.source)
 
     def test_cancel_and_validation_failure_preserve_source(self):
         for cancelled in (False, True):
             with self.subTest(cancelled=cancelled):
-                job = self.runtime.migrate_controller(self.target)
+                job = self.operation(MigrateOperation, self.target)
                 def validate(*_args):
                     if cancelled:
-                        job.cancel("")
+                        job.cancel_check = lambda: True
                     else:
                         raise RuntimeError("invalid environment")
                 with patch.object(job, "validate", side_effect=validate):
-                    status = self.run_job(job)
+                    status = job.run()
                 self.assertEqual(status["state"], "cancelled" if cancelled else "failed")
                 self.assertTrue(self.source.exists())
                 self.assertFalse(self.target.exists())
 
     def test_cleanup_failure_warns_without_failing_saved_migration(self):
-        job = self.runtime.migrate_controller(self.target)
+        job = self.operation(MigrateOperation, self.target)
         with patch.object(job, "validate"), patch.object(storage, "remove_server_directory", side_effect=PermissionError("busy")):
-            status = self.run_job(job)
+            status = job.run()
         self.assertEqual(status["state"], "succeeded")
         self.assertIn(str(self.source), status["result"]["warning"])
         self.assertIn("old folder remains", status["result"]["warning"])
-        self.assertEqual(self.runtime.storage_root(), self.target)
+        self.assertEqual(self.current, self.target)
         self.assertTrue(self.source.exists())
         self.assertTrue((self.target / "data/sample.bin").is_file())
         self.assertFalse(list((self.base / "state").glob("*.json")))
 
     def test_low_space_does_not_remove_source(self):
-        job = self.runtime.migrate_controller(self.target)
+        job = self.operation(MigrateOperation, self.target)
         with patch.object(storage.shutil, "disk_usage", return_value=Mock(free=0)):
-            status = self.run_job(job)
+            status = job.run()
         self.assertEqual(status["state"], "failed")
         self.assertTrue(self.source.exists())
         self.assertFalse(self.target.exists())
+
+    def test_interrupted_commit_preserves_both_locations(self):
+        from blendjob.control_maintenance import CommitUncertain
+        job = self.operation(MigrateOperation, self.target)
+        with patch.object(job, "validate"), patch.object(job, "save_location", side_effect=CommitUncertain("Owner exited")):
+            status = job.run()
+        self.assertEqual(status["state"], "failed")
+        self.assertTrue((self.source / "data/sample.bin").is_file())
+        self.assertTrue((self.target / "data/sample.bin").is_file())
 
     def test_lock_is_external_and_blocks_another_process(self):
         lease = storage.StorageLock()
@@ -184,61 +155,42 @@ class StorageMigrationTest(unittest.TestCase):
         competing.acquire(self.source)
         competing.release()
 
-    def test_setup_hook_receives_online_policy_and_controls_failure(self):
-        from blendjob.maintenance import SetupController
-        self.runtime.post_setup = Mock(side_effect=RuntimeError("setup hook failed"))
-        job = self.runtime.setup_controller(self.target, online=False)
-        with patch.object(SetupController, "install"), patch("blendjob.maintenance.validate_environment"), patch.object(job.server, "ensure"):
-            status = self.run_job(job)
+    def test_setup_validation_failure_does_not_save_location(self):
+        job = self.operation(SetupOperation, self.target, online=False)
+        with patch.object(job, "install"), patch("blendjob.control_maintenance.validate_environment"), patch.object(job.server, "ensure", side_effect=RuntimeError("Invalid server")):
+            status = job.run()
         self.assertEqual(status["state"], "failed")
-        self.assertIn("setup hook failed", status["error"])
-        self.runtime.post_setup.assert_called_once_with(job)
+        self.assertIn("Invalid server", status["error"])
         self.assertFalse(job.online)
-        self.assertEqual(self.runtime.storage_root(), self.source)
+        self.assertEqual(self.current, self.source)
 
-    def test_offline_setup_reuses_environment_and_saves_after_hook(self):
+    def test_offline_setup_reuses_environment_and_saves_after_validation(self):
         self.target.mkdir(parents=True)
-        storage.write_json(self.target / "manifest.json", {"environment_hash": self.runtime.environment_hash})
+        storage.write_json(self.target / "manifest.json", {"environment_hash": self.config.environment_hash})
         from blendjob.environment import environment_python
         python = environment_python(self.target)
         python.parent.mkdir(parents=True)
         python.touch()
         seen = []
-        self.runtime.post_setup = lambda setup: seen.append(self.runtime.storage_root())
-        job = self.runtime.setup_controller(self.target, online=False)
-        with patch("blendjob.maintenance.validate_environment"), patch.object(job.server, "ensure"), patch.object(job, "install", side_effect=AssertionError("already installed")):
-            status = self.run_job(job)
+        job = self.operation(SetupOperation, self.target, online=False)
+        with patch("blendjob.control_maintenance.validate_environment"), patch.object(job.server, "ensure", side_effect=lambda **kwargs: seen.append(self.current)), patch.object(job, "install", side_effect=AssertionError("already installed")):
+            status = job.run()
         self.assertEqual(status["state"], "succeeded")
         self.assertEqual(seen, [self.source])
-        self.assertEqual(self.runtime.storage_root(), self.target)
+        self.assertEqual(self.current, self.target)
 
     def test_same_location_migration_is_a_noop(self):
-        job = self.runtime.migrate_controller(self.source)
-        status = self.run_job(job)
+        job = self.operation(MigrateOperation, self.source)
+        status = job.run()
         self.assertEqual(status["state"], "succeeded")
         self.assertTrue((self.source / "data/sample.bin").is_file())
 
     def test_cancellation_cannot_interrupt_cleanup_after_save(self):
-        from types import SimpleNamespace
-        job = self.runtime.migrate_controller(self.target)
-        self.runtime.active_job = SimpleNamespace(controller=job, cancelled=False, started=True, job_id="maintenance")
+        job = self.operation(MigrateOperation, self.target)
         def finish():
-            self.runtime.cancel_active()
-            self.assertFalse(self.runtime.active_job.cancelled)
+            job.cancel_check = lambda: True
+            job.check_cancelled()
             self.assertFalse(job.cancellable)
         with patch.object(job, "validate"), patch.object(storage.StorageMigration, "cleanup_source", side_effect=finish):
-            status = self.run_job(job)
+            status = job.run()
         self.assertEqual(status["state"], "succeeded")
-
-    def test_setup_request_forwards_progress_and_cancellation(self):
-        job = self.runtime.setup_controller(self.target)
-        job.server.request = Mock(return_value="result")
-        self.assertEqual(job.request("prepare", {"key": "value"}), "result")
-        call = job.server.request.call_args
-        self.assertEqual(call.args, ("prepare", {"key": "value"}))
-        call.kwargs["progress"]({"progress": 0.5, "message": "Preparing resources"})
-        self.assertEqual(job.state["message"], "Preparing resources")
-        job.cancel("")
-        self.assertTrue(call.kwargs["cancel_check"]())
-        with self.assertRaisesRegex(RuntimeError, "cancelled"):
-            job.request("prepare", {})

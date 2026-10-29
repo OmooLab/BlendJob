@@ -1,14 +1,8 @@
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
-from .controller import ServerController
-from .entrypoint import normalized_entrypoint
-from .environment import environment_digest, normalized_environment, environment_python
+from .configuration import ServerConfiguration
+from .process import ProcessServer, ActionController
 from .operator import JobOperatorBase
-from .storage import StorageLock, read_json
 from .maintenance import MaintenanceController, SetupController, MigrateController
 
 
@@ -25,13 +19,8 @@ class JobRuntime:
         namespace,
         post_setup=None,
     ):
-        self.server_entrypoint = normalized_entrypoint(
-            server_entrypoint,
-            root=entrypoint_root,
-        )
+        self.config = ServerConfiguration(server_entrypoint, environment, entrypoint_root=entrypoint_root)
         self.storage_root_setting = storage_root
-        self.environment = normalized_environment(environment)
-        self.environment_hash = environment_digest(self.environment)
         if post_setup is not None and not callable(post_setup):
             raise TypeError("post_setup must be callable")
         self.post_setup = post_setup
@@ -41,25 +30,18 @@ class JobRuntime:
         self.active_job = None
         self.progress = 0.0
         self.message = "Ready"
+        self._ui_state = None
         self._operator_base = None
         self._operator_classes = None
-        self._timer_registered = False
         self._registered = False
         self._status_bar_draw = self._create_status_bar_draw()
-        self.directory_lock = StorageLock()
-        self.server = ServerController(
-            self._server_command,
-            cwd_factory=self.storage_root,
-            log_path_factory=lambda: self.storage_root() / "server.log",
-            creationflags=windows_creation_flags(),
-            directory_lock=self.directory_lock, blocked=self.maintenance_busy,
-        )
+        self.server = ProcessServer(self)
         self.JobOperatorBase = self.operator_base()
 
     def setup_controller(self, target=None, *, mirror=False, online=True):
-        """Install at a location, prepare add-on resources, and save it."""
+        """Install and validate an environment, then save its location."""
         target = self.storage_root() if target is None else Path(target).expanduser().resolve()
-        self.inspect_installation(target)
+        self.config.inspect_installation(target)
         return SetupController(self, target, mirror=mirror, online=online)
 
     def migrate_controller(self, target):
@@ -71,14 +53,6 @@ class JobRuntime:
 
     def maintenance_busy(self):
         return isinstance(getattr(self.active_job, "controller", None), MaintenanceController)
-
-    def server_controller(self, root):
-        """Create a Server connection for a directory already locked by maintenance."""
-        return ServerController(
-            lambda port, instance_id: self._server_command(port, instance_id, root=root),
-            cwd_factory=lambda: root, log_path_factory=lambda: root / "server.log",
-            creationflags=windows_creation_flags(),
-        )
 
     def storage_root(self, path=None):
         """Read or save the configured location without creating its directory."""
@@ -92,53 +66,15 @@ class JobRuntime:
             configured = self.storage_root_setting
         return Path(configured).expanduser().resolve()
 
-    def environment_directory(self):
-        return self.storage_root() / ".venv"
-
-    def environment_python(self):
-        return environment_python(self.storage_root())
-
-    def install_status_path(self):
-        return self.storage_root() / "install-status.json"
-
-    def install_log_path(self):
-        return self.storage_root() / "install.log"
-
     def server_log_path(self):
         return self.storage_root() / "server.log"
 
-    def environment_manifest(self, root=None):
-        root = self.storage_root() if root is None else Path(root)
-        return read_json(root / "manifest.json")
+    def environment_ready(self):
+        return self.config.environment_ready(self.storage_root())
 
-    def environment_ready(self, root=None):
-        root = self.storage_root() if root is None else Path(root)
-        return (
-            environment_python(root).is_file()
-            and self.environment_manifest(root).get("environment_hash") == self.environment_hash
-        )
-
-    def inspect_installation(self, root):
-        """Inspect a setup target without creating or modifying its files."""
-        root = Path(root)
-        recognized = bool(self.environment_manifest(root) or read_json(root / "environment.json"))
-        if root.exists() and (not root.is_dir() or (any(root.iterdir()) and not recognized)):
-            raise ValueError(f"The target is not a BlendJob installation: {root}")
-        return {"environment_ready": self.environment_ready(root)}
-
-    def install_command(self, source="official", *, root=None):
-        root = self.storage_root() if root is None else root
-        root.mkdir(parents=True, exist_ok=True)
-        config = root / "environment.json"
-        config.write_text(json.dumps(self.environment, indent=2), encoding="utf-8")
-        installer = Path(__file__).with_name("installer") / "environment.py"
-        return [sys.executable, str(installer), "--storage-root", str(root),
-                "--config", str(config), "--status", str(root / "install-status.json"),
-                "--source", source]
-
-    def request(self, job_type, parameters, response=None):
-        """Directly request one Server Job and return its JobResult."""
-        return self.server.request(job_type, parameters, response=response)
+    def request_blocking(self, job_type, parameters, response=None):
+        """Wait for one JobResult in a standalone script; use JobOperatorBase for Blender UI."""
+        return self.server.request_blocking(job_type, parameters, response=response)
 
     def operator_base(self):
         if self._operator_base is not None:
@@ -190,11 +126,22 @@ class JobRuntime:
                 return runtime.setup_controller(self.directory or None, mirror=self.use_mirror,
                                                 online=bpy.app.online_access)
 
-        class MigrateServer(operator_base, bpy.types.Operator):
-            bl_idname = f"{runtime.namespace}.migrate_server"
-            bl_label = "Migrate Server"
-            job_type = "migrate-server"
-            starting_message = "Migrating Server"
+            def _finish_success(self, context, job, status):
+                """Call post_setup(controller) on the main thread after releasing setup."""
+                result = super()._finish_success(context, job, status)
+                if result == {"FINISHED"} and runtime.post_setup is not None:
+                    try:
+                        runtime.post_setup(job.controller)
+                    except Exception as error:
+                        self.report({"ERROR"}, f"Setup completed, but post_setup failed: {error}")
+                        return {"CANCELLED"}
+                return result
+
+        class MigrateFolder(operator_base, bpy.types.Operator):
+            bl_idname = f"{runtime.namespace}.migrate_folder"
+            bl_label = "Migrate Folder"
+            job_type = "migrate-folder"
+            starting_message = "Migrating Folder"
 
             directory: bpy.props.StringProperty(subtype="DIR_PATH", options={"SKIP_SAVE"})
             filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
@@ -227,31 +174,30 @@ class JobRuntime:
                 if warning:
                     self.report({"WARNING"}, warning)
                     return warning
-                return "Server migration completed"
+                return "Folder migration completed"
 
-        class ClearJobFiles(bpy.types.Operator):
+        class ClearJobFiles(operator_base, bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.clear_job_files"
             bl_label = "Clear Job Files"
             bl_options = {"INTERNAL"}
+            job_type = "maintain-job-files"
+            starting_message = "Reading job files"
 
             @classmethod
             def poll(cls, _context):
                 return runtime.environment_ready() and not runtime.server_busy()
 
             def invoke(self, context, _event):
-                try:
-                    if not self.poll(context):
-                        raise RuntimeError("Wait for the current task to finish")
-                    connection = runtime.server.ensure()
-                    self._preview = connection.client.preview_job_files()
-                    self._connection = connection
-                    if not self._preview["jobs"]:
-                        self.report({"INFO"}, "No unused job files to clear")
-                        return {"CANCELLED"}
-                except (OSError, RuntimeError, ValueError) as error:
-                    self.report({"ERROR"}, str(error))
-                    return {"CANCELLED"}
-                return context.window_manager.invoke_props_dialog(self, width=460, confirm_text="Delete Files")
+                self._action = "preview_files"
+                return operator_base.execute(self, context)
+
+            def controller(self, _runtime):
+                return ActionController(runtime.server, self._action)
+
+            def request(self, _context):
+                if self._action == "preview_files":
+                    return {}
+                return {"jobs": self._preview["jobs"], "instance_id": self._preview["instance_id"]}
 
             def draw(self, _context):
                 preview = self._preview
@@ -259,20 +205,25 @@ class JobRuntime:
                 self.layout.label(text="Permanently delete job outputs and logs.")
 
             def execute(self, context):
-                try:
-                    if not self.poll(context) or not getattr(self, "_preview", {}).get("jobs"):
-                        raise RuntimeError("Preview and confirm cleanup while the server is idle")
-                    connection = runtime.server.connection
-                    if connection is None or connection is not self._connection:
-                        raise RuntimeError("Job Server changed; preview cleanup again")
-                    result = connection.client.clear_job_files(self._preview["jobs"])
-                except (OSError, RuntimeError, ValueError) as error:
-                    self.report({"ERROR"}, str(error))
+                if not self.poll(context) or not getattr(self, "_preview", {}).get("jobs"):
+                    self.report({"ERROR"}, "Preview and confirm cleanup while the server is idle")
                     return {"CANCELLED"}
-                kept = result["skipped"] + len(result["failed"])
-                self.report({"WARNING"} if kept else {"INFO"},
-                            f"Deleted {len(result['jobs'])} jobs ({result['bytes'] / 1_000_000:.1f} MB); kept {kept}")
-                return {"FINISHED"}
+                self._action = "clear_files"
+                return operator_base.execute(self, context)
+
+            def response(self, context, result):
+                value = result.value
+                if self._action == "preview_files":
+                    self._preview = value
+                    if not value["jobs"]:
+                        self.report({"INFO"}, "No unused job files to clear")
+                    else:
+                        context.window_manager.invoke_props_dialog(self, width=460, confirm_text="Delete Files")
+                    return "Job files inspected"
+                kept = value["skipped"] + len(value["failed"])
+                message = f"Deleted {len(value['jobs'])} jobs ({value['bytes'] / 1_000_000:.1f} MB); kept {kept}"
+                self.report({"WARNING"} if kept else {"INFO"}, message)
+                return message
 
         class CancelJob(bpy.types.Operator):
             bl_idname = f"{runtime.namespace}.cancel_job"
@@ -342,7 +293,7 @@ class JobRuntime:
 
         self._operator_classes = (
             SetupServer,
-            MigrateServer,
+            MigrateFolder,
             ClearJobFiles,
             CancelJob,
             StartServer,
@@ -380,20 +331,23 @@ class JobRuntime:
         self.active_job = job
 
     def finish_job(self, job):
-        if job.job_id or isinstance(job.controller, MaintenanceController):
-            job.controller.mark_job_complete(job.job_id)
         try:
-            job.operator.cleanup()
+            job.controller.mark_job_complete(job.job_id)
+        except (OSError, RuntimeError):
+            pass
         finally:
-            if self.active_job is job:
-                self.active_job = None
+            try:
+                job.operator.cleanup()
+            finally:
+                if self.active_job is job:
+                    self.active_job = None
 
     def cancel_active(self):
         job = self.active_job
-        if job is None or (isinstance(job.controller, MaintenanceController) and not job.controller.cancellable):
+        if job is None or not getattr(job.controller, "cancellable", True):
             return
         job.cancelled = True
-        if not job.started or not job.job_id:
+        if not job.job_id:
             return
         try:
             job.controller.cancel(job.job_id)
@@ -414,8 +368,14 @@ class JobRuntime:
             self.redraw_ui(force=True)
 
     def update_ui(self, context, progress, message):
-        self.progress = min(max(float(progress), 0.0), 1.0)
-        self.message = str(message)
+        progress = min(max(float(progress), 0.0), 1.0)
+        message = str(message)
+        state = (id(self.active_job), progress, message)
+        if self._ui_state == state:
+            return
+        self._ui_state = state
+        self.progress = progress
+        self.message = message
         window_manager = getattr(context, "window_manager", None)
         if window_manager is not None and hasattr(
             window_manager, "progress_update"
@@ -474,6 +434,9 @@ class JobRuntime:
     def clear_resource(self, name):
         return self.server.clear_resource(name)
 
+    def action_controller(self, action):
+        return ActionController(self.server, action)
+
     def enable(self):
         try:
             import bpy
@@ -483,7 +446,6 @@ class JobRuntime:
         if timers is None or timers.is_registered(self._poll_server):
             return
         timers.register(self._poll_server, first_interval=1.0, persistent=True)
-        self._timer_registered = True
 
     def disable(self):
         self.cancel_active()
@@ -497,17 +459,19 @@ class JobRuntime:
             for callback in (self._poll_server, self._redraw_status_bars):
                 if timers.is_registered(callback):
                     timers.unregister(callback)
-        self._timer_registered = False
         self.server.detach()
 
     def _poll_server(self):
         if self.maintenance_busy():
-            self.redraw_ui()
             return 0.5
         if self._registered:
             self._ensure_status_bar_draw()
-        interval = self.server.poll(available=self.environment_ready())
-        self.redraw_ui()
+        previous = {key: value for key, value in self.server.snapshot.items() if key != "active_job"}
+        available = self.server.control.process is not None or self.environment_ready()
+        interval = self.server.poll(available=available)
+        current = {key: value for key, value in self.server.snapshot.items() if key != "active_job"}
+        if current != previous:
+            self.redraw_ui()
         return interval
 
     def _ensure_status_bar_draw(self):
@@ -550,30 +514,3 @@ class JobRuntime:
             runtime._draw_status_bar(owner, context)
 
         return draw_status_bar
-
-    def _server_command(self, port, instance_id, *, root=None):
-        python = self.environment_python() if root is None else environment_python(root)
-        root = self.storage_root() if root is None else root
-        launcher = Path(__file__).with_name("launcher") / "runner.py"
-        return [
-            str(python),
-            "-u",
-            str(launcher),
-            "--entrypoint",
-            self.server_entrypoint,
-            "--storage-root",
-            str(root),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--instance-id",
-            instance_id,
-            "--parent-pid",
-            str(os.getpid()),
-        ]
-
-def windows_creation_flags():
-    if os.name != "nt":
-        return 0
-    return subprocess.CREATE_NO_WINDOW

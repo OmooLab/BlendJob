@@ -1,13 +1,10 @@
-"""Reusable local HTTP Job Server for Blender add-ons."""
+"""Blender frontend for local job services."""
 
-from .client import JobResult
+from .result import JobResult
 from .runtime import JobRuntime
-from .server import JobContext, JobServer
 
 
 __all__ = (
-    "JobContext",
     "JobResult",
-    "JobServer",
     "JobRuntime",
 )

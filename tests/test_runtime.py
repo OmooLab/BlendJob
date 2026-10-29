@@ -1,6 +1,5 @@
 import sys
 import tempfile
-import threading
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,8 +23,8 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
                 namespace="example",
             )
 
-            official = runtime.install_command()
-            mirror = runtime.install_command(source="mirror")
+            official = runtime.config.install_command(runtime.storage_root())
+            mirror = runtime.config.install_command(runtime.storage_root(), source="mirror")
 
         self.assertEqual(official[-2:], ["--source", "official"])
         self.assertEqual(mirror[-2:], ["--source", "mirror"])
@@ -40,7 +39,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
             self.assertEqual(runtime.storage_root(), target)
             self.assertFalse(runtime.environment_ready())
             self.assertFalse(target.exists())
-            runtime.install_command()
+            runtime.config.install_command(runtime.storage_root())
             self.assertTrue((target / "environment.json").is_file())
 
     def test_setup_target_inspection_and_execution_reject_unrelated_data(self):
@@ -52,23 +51,23 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
             runtime = JobRuntime(f"{entrypoint}:server", storage_root=Path(directory) / "current",
                                  environment={"python": "3.12"}, namespace="example")
             target = Path(directory) / "selected"
-            self.assertFalse(runtime.inspect_installation(target)["environment_ready"])
+            self.assertFalse(runtime.config.inspect_installation(target)["environment_ready"])
             self.assertFalse(target.exists())
             target.mkdir()
             unrelated = target / "keep.txt"
             unrelated.write_text("keep")
             with self.assertRaisesRegex(ValueError, "not a BlendJob"):
-                runtime.inspect_installation(target)
+                runtime.config.inspect_installation(target)
             with self.assertRaisesRegex(ValueError, "not a BlendJob"):
                 runtime.setup_controller(target)
             self.assertEqual(unrelated.read_text(), "keep")
             write_json(target / "environment.json", {"python": "3.12"})
-            self.assertFalse(runtime.inspect_installation(target)["environment_ready"])
+            self.assertFalse(runtime.config.inspect_installation(target)["environment_ready"])
             python = environment_python(target)
             python.parent.mkdir(parents=True)
             python.touch()
-            write_json(target / "manifest.json", {"environment_hash": runtime.environment_hash})
-            self.assertTrue(runtime.inspect_installation(target)["environment_ready"])
+            write_json(target / "manifest.json", {"environment_hash": runtime.config.environment_hash})
+            self.assertTrue(runtime.config.inspect_installation(target)["environment_ready"])
             self.assertFalse(runtime.environment_ready())
 
     def test_progress_is_monotonic_for_one_job(self):
@@ -90,7 +89,7 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
         self.assertEqual(job.progress, 0.8)
         runtime.update_ui.assert_called_once_with(None, 0.8, "Working")
 
-    def test_progress_resets_when_post_setup_job_changes(self):
+    def test_progress_resets_when_job_changes(self):
         runtime = SimpleNamespace(update_ui=Mock(), redraw_ui=Mock())
         job = SimpleNamespace(
             job_id="environment",
@@ -119,19 +118,18 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
         self.assertFalse(hasattr(blendjob, "BlenderJobRuntime"))
         self.assertEqual(
             set(blendjob.__all__),
-            {"JobContext", "JobResult", "JobRuntime", "JobServer"},
+            {"JobResult", "JobRuntime"},
         )
         self.assertFalse(hasattr(blendjob, "JobOperatorState"))
         self.assertFalse(hasattr(blendjob, "ServerController"))
+        self.assertFalse(hasattr(blendjob, "JobServer"))
+        self.assertFalse(hasattr(blendjob, "JobContext"))
 
     def test_server_runner_uses_bundled_launcher(self):
-        runtime = SimpleNamespace(
-            environment_python=lambda: Path("environment/python"),
-            server_entrypoint="addon/server/__init__.py:server",
-            storage_root=lambda: Path("storage"),
-        )
-
-        command = JobRuntime._server_command(runtime, 8123, "instance")
+        from blendjob.configuration import ServerConfiguration
+        config = SimpleNamespace(server_entrypoint="addon/server/__init__.py:server")
+        with patch("blendjob.configuration.environment_python", return_value=Path("environment/python")):
+            command = ServerConfiguration.server_command(config, Path("storage"), 8123, "instance")
 
         self.assertEqual(command[:2], [str(Path("environment/python")), "-u"])
         self.assertEqual(Path(command[2]).name, "runner.py")
@@ -142,6 +140,30 @@ class JobRuntimeEnvironmentTest(unittest.TestCase):
 
 
 class JobRuntimeStopTest(unittest.TestCase):
+    def test_remote_cleanup_failure_does_not_block_local_cleanup_or_next_job(self):
+        for error in (RuntimeError("Control process exited"), OSError("IPC unavailable")):
+            with self.subTest(error=error):
+                runtime = self.runtime(Mock())
+                controller = Mock()
+                controller.mark_job_complete.side_effect = error
+                operator = Mock()
+                job = JobOperatorState(runtime, operator, controller, job_id="job")
+                runtime.begin_job(job)
+                runtime.finish_job(job)
+                operator.cleanup.assert_called_once()
+                self.assertIsNone(runtime.active_job)
+                runtime.begin_job(JobOperatorState(runtime, Mock(), Mock()))
+
+    def test_operator_cleanup_failure_still_releases_active_job(self):
+        runtime = self.runtime(Mock())
+        operator = Mock()
+        operator.cleanup.side_effect = RuntimeError("Cleanup failed")
+        job = JobOperatorState(runtime, operator, Mock(), job_id="job")
+        runtime.begin_job(job)
+        with self.assertRaisesRegex(RuntimeError, "Cleanup failed"):
+            runtime.finish_job(job)
+        self.assertIsNone(runtime.active_job)
+
     def runtime(self, server):
         runtime = JobRuntime.__new__(JobRuntime)
         runtime.active_job = None
@@ -162,7 +184,6 @@ class JobRuntimeStopTest(unittest.TestCase):
             operator=operator,
             controller=controller,
             job_id="job",
-            started=True,
         )
 
     def test_stop_cancels_active_job_before_server_and_cleans_up_after(self):
@@ -221,55 +242,6 @@ class JobRuntimeStopTest(unittest.TestCase):
         self.assertIsNone(runtime.active_job)
         runtime.redraw_ui.assert_called_once_with(force=True)
 
-    def test_stop_cancels_job_while_submission_is_in_flight(self):
-        events = []
-        submit_started = threading.Event()
-        release_submit = threading.Event()
-
-        def submit(_job_type, _parameters):
-            submit_started.set()
-            release_submit.wait(1.0)
-            return {"job_id": "job", "directory": "."}
-
-        controller = SimpleNamespace(
-            submit=submit,
-            cancel=lambda _job_id: events.append("cancel"),
-            mark_job_complete=lambda _job_id: events.append("mark"),
-        )
-        job = JobOperatorState(
-            runtime=None,
-            operator=SimpleNamespace(
-                job_type="example",
-                cleanup=lambda: events.append("cleanup"),
-            ),
-            controller=controller,
-        )
-        submit_thread = threading.Thread(
-            target=JobOperatorBase._submit_job,
-            args=(job.operator, job, {}),
-        )
-
-        def stop_server():
-            events.append("stop-start")
-            release_submit.set()
-            submit_thread.join(1.0)
-            events.append("stop-end")
-
-        runtime = self.runtime(SimpleNamespace(stop=stop_server))
-        job.runtime = runtime
-        runtime.active_job = job
-        submit_thread.start()
-        self.assertTrue(submit_started.wait(1.0))
-
-        runtime.stop()
-
-        self.assertEqual(
-            events,
-            ["stop-start", "cancel", "stop-end", "mark", "cleanup"],
-        )
-        self.assertTrue(job.cancelled)
-        self.assertIsNone(runtime.active_job)
-
     def test_modal_after_stop_cancels_without_duplicate_cleanup(self):
         cleanup = Mock()
         runtime = SimpleNamespace(active_job=None)
@@ -291,6 +263,7 @@ class JobRuntimeRedrawTest(unittest.TestCase):
     def setUp(self):
         self.runtime = JobRuntime.__new__(JobRuntime)
         self.runtime.active_job = None
+        self.runtime._ui_state = None
         self.notifications = []
         self.window = None
         self.context = SimpleNamespace(
@@ -413,7 +386,7 @@ class JobRuntimeRedrawTest(unittest.TestCase):
                 operator = JobOperatorBase()
                 operator.job_runtime = self.runtime
                 job = JobOperatorState(
-                    self.runtime, operator, Mock(), job_id="job", started=True,
+                    self.runtime, operator, Mock(), job_id="job",
                 )
                 self.runtime.active_job = job
                 result = operator._close(
@@ -429,7 +402,7 @@ class JobRuntimeRedrawTest(unittest.TestCase):
         self.runtime.server = Mock()
         self.runtime.active_job = JobOperatorState(
             self.runtime, SimpleNamespace(cleanup=Mock()), Mock(),
-            job_id="job", started=True,
+            job_id="job",
         )
         self.runtime.stop()
         self.flush_redraws()
@@ -555,6 +528,28 @@ class JobRuntimeStatusBarTest(unittest.TestCase):
             getattr(self.runtime._status_bar_draw, "_owner", None),
             "example",
         )
+
+    def test_poll_only_redraws_changed_server_state(self):
+        self.runtime._poll_server()
+        self.runtime.redraw_ui.assert_not_called()
+        def poll(**kwargs):
+            self.runtime.server.snapshot = {"state": "READY"}
+            return 1.0
+        self.runtime.server.poll.side_effect = poll
+        self.runtime._poll_server()
+        self.runtime._poll_server()
+        self.runtime.redraw_ui.assert_called_once()
+
+    def test_progress_only_redraws_changes_and_job_completion(self):
+        context = SimpleNamespace(window_manager=Mock())
+        self.runtime.active_job = SimpleNamespace()
+        for _ in range(20):
+            self.runtime.update_ui(context, 0.5, "Working")
+        self.runtime.redraw_ui.assert_called_once_with(context, force=True)
+        context.window_manager.progress_update.assert_called_once_with(50)
+        self.runtime.active_job = None
+        self.runtime.update_ui(context, 0.5, "Working")
+        self.assertEqual(self.runtime.redraw_ui.call_count, 2)
 
     def test_poll_does_not_duplicate_status_bar_and_unregister_stops_recovery(self):
         self.runtime.register()

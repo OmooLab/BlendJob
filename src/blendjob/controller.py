@@ -9,7 +9,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from .client import JobClient, JobResult
+from .client import JobClient
+from .processes import RegisteredServerProcess, terminate_process_tree
 
 SERVER_DIRECTORY_LOCKS = {}
 
@@ -33,7 +34,7 @@ class ServerController:
         log_path_factory,
         host="127.0.0.1",
         creationflags=0,
-        directory_lock=None, blocked=None,
+        directory_lock=None,
     ):
         self.command_factory = command_factory
         self.cwd_factory = cwd_factory
@@ -41,7 +42,6 @@ class ServerController:
         self.host = host
         self.creationflags = creationflags
         self.directory_lock = directory_lock
-        self.blocked = blocked
         self.connection = None
         self.process = None
         self.log_file = None
@@ -49,9 +49,6 @@ class ServerController:
         self.snapshot = {"state": "STOPPED", "message": "Stopped"}
 
     def start(self):
-        if self.blocked is not None and self.blocked():
-            self.auto_start = False
-            raise RuntimeError("Server Location is being changed")
         if self.process is None:
             self._recover_connection()
         if self.directory_lock is not None:
@@ -111,10 +108,12 @@ class ServerController:
         }
         return health
 
-    def ensure(self, timeout=60.0):
+    def ensure(self, timeout=60.0, *, cancel_check=None):
         self.auto_start = True
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("Operation cancelled")
             try:
                 self.health(timeout=0.5)
                 return self.connection
@@ -191,66 +190,47 @@ class ServerController:
         self.auto_start = True
         return self.start()
 
-    def submit(self, job_type, parameters):
-        return self.ensure().client.submit(job_type, parameters)
-
-    def request(
-        self,
-        job_type,
-        parameters,
-        *,
-        response=None,
-        progress=None,
-        cancel_check=None,
-        poll_interval=0.25,
-    ):
-        """Submit one Job and return its response after polling to completion."""
-        submitted = self.submit(job_type, parameters)
-        job_id = submitted["job_id"]
-        directory = submitted["directory"]
-        cancel_requested = False
+    def run_job(self, job_type, parameters, *, job_id=None, progress=None, cancel_check=None):
+        """Run one job with a known identity and bounded cancellation."""
+        client = self.ensure(cancel_check=cancel_check).client
+        job_id = job_id or uuid.uuid4().hex
+        submitted = {"job_id": job_id, "directory": str(Path(self.cwd_factory()) / "jobs" / job_id)}
+        finished = False
+        cancellation_deadline = None
         try:
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("Operation cancelled")
+            client.submit(job_type, parameters, job_id=job_id)
             while True:
-                if (
-                    not cancel_requested
-                    and cancel_check is not None
-                    and cancel_check()
-                ):
-                    self.cancel(job_id)
-                    cancel_requested = True
-                status = self.status(job_id)
+                if cancellation_deadline is None and cancel_check is not None and cancel_check():
+                    cancellation_deadline = time.monotonic() + 5
+                    client.cancel(job_id)
+                if cancellation_deadline is not None and time.monotonic() >= cancellation_deadline:
+                    self.stop()
+                    status = {**submitted, "state": "cancelled", "message": "Task cancelled"}
+                else:
+                    status = {**submitted, **client.status(job_id)}
+                    self.snapshot = {**self.snapshot, "state": "BUSY", "busy": True,
+                                     "active_job": status}
+                finished = status.get("state") in {"succeeded", "failed", "cancelled"}
                 if progress is not None:
-                    progress({"job_id": job_id, "directory": directory, **status})
-                state = status.get("state")
-                if state == "succeeded":
-                    result = JobResult._from_status(
-                        {"job_id": job_id, "directory": directory, **status}
-                    )
-                    if response is not None:
-                        response(result)
-                    return result
-                if state == "cancelled":
-                    raise RuntimeError("Server request was cancelled")
-                if state == "failed":
-                    raise RuntimeError(status.get("error") or "Server request failed")
-                time.sleep(max(float(poll_interval), 0.01))
+                    progress(status)
+                if finished:
+                    return status
+                time.sleep(0.1)
         finally:
-            self.mark_job_complete(job_id)
-
-    def status(self, job_id):
-        return self.ensure().client.status(job_id)
-
-    def cancel(self, job_id):
-        return self.ensure().client.cancel(job_id)
-
-    def resource(self, name):
-        return self.ensure().client.resource(name)
+            try:
+                if not finished:
+                    try:
+                        client.cancel(job_id)
+                    except RuntimeError:
+                        # Acceptance may be unknown if the submission response was lost.
+                        self.stop()
+            finally:
+                self.mark_job_complete(job_id)
 
     def clear_resource(self, name):
         return self.ensure().client.clear_resource(name)
-
-    def detach(self):
-        self.stop()
 
     def poll(self, *, available=True):
         if not available:
@@ -310,62 +290,3 @@ class ServerController:
         if self.log_file is not None:
             self.log_file.close()
             self.log_file = None
-
-
-def terminate_process_tree(process):
-    """Terminate only the owned Server and its child processes."""
-    if os.name == "nt":
-        result = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode and process.poll() is None:
-            raise RuntimeError(f"Unable to stop Server process {process.pid}")
-    else:
-        process.terminate()
-
-
-class RegisteredServerProcess:
-    """Wait for a verified Server recovered after a Runtime reload."""
-
-    def __init__(self, pid):
-        self.pid = pid
-
-    def poll(self):
-        if os.name == "nt":
-            import ctypes
-            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel.OpenProcess.restype = ctypes.c_void_p
-            handle = kernel.OpenProcess(0x100000, False, self.pid)
-            if not handle:
-                return 0
-            try:
-                kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-                return None if kernel.WaitForSingleObject(handle, 0) == 258 else 0
-            finally:
-                kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-                kernel.CloseHandle(handle)
-        try:
-            pid, _status = os.waitpid(self.pid, os.WNOHANG)
-            if pid:
-                return 0
-        except ChildProcessError:
-            pass
-        try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
-            return 0
-        return None
-
-    def wait(self, timeout):
-        deadline = time.monotonic() + timeout
-        while self.poll() is None:
-            if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired(str(self.pid), timeout)
-            time.sleep(0.05)
-
-    def terminate(self):
-        import signal
-        os.kill(self.pid, signal.SIGTERM)
-
-    def kill(self):
-        import signal
-        os.kill(self.pid, getattr(signal, "SIGKILL", signal.SIGTERM))

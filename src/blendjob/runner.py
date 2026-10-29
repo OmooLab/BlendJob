@@ -5,6 +5,7 @@ import sys
 import threading
 
 from .entrypoint import split_entrypoint
+from .processes import RegisteredServerProcess
 
 
 def parse_args():
@@ -47,13 +48,22 @@ def load_server(entrypoint):
     return server
 
 
+def watch_parent(parent_pid, shutdown_event, interval=1.0):
+    if not parent_pid:
+        return
+    parent = RegisteredServerProcess(parent_pid)
+    while not shutdown_event.wait(interval):
+        if parent.poll() is not None:
+            shutdown_event.set()
+            return
+
+
 def main():
     args = parse_args()
     server = load_server(args.entrypoint)
     server.bind(args.storage_root)
 
     import uvicorn
-    from blendjob.server import watch_parent
 
     app = server.create_app(args.instance_id)
     config = uvicorn.Config(
