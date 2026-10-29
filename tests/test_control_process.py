@@ -2,6 +2,7 @@
 import os
 import shutil
 import queue
+import subprocess
 import sys
 import sysconfig
 import threading
@@ -106,6 +107,13 @@ def ignore_cancel(context, parameters):
     venv.EnvBuilder(with_pip=False).create(environment)
     site = environment / ("Lib/site-packages" if os.name == "nt" else f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages")
     (site / "test-dependencies.pth").write_text(sysconfig.get_path("purelib") + "\n", encoding="utf-8")
+    from blendjob.environment import environment_python
+    probe = subprocess.run(
+        [str(environment_python(root)), "-I", "-c",
+         "import sys; print(sys.path); import fastapi, uvicorn"],
+        capture_output=True, text=True,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
     runtime = JobRuntime(f"{entrypoint}:server", storage_root=root,
                          environment={"python": f"{sys.version_info.major}.{sys.version_info.minor}"}, namespace="process_test")
     write_json(root / "manifest.json", {"environment_hash": runtime.config.environment_hash})
