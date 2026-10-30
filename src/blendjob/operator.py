@@ -1,22 +1,5 @@
 import json
-from dataclasses import dataclass
-from pathlib import Path
-
-from .result import JobResult
-
-
-@dataclass
-class JobOperatorState:
-    """Internal state for one modal Job Operator invocation."""
-
-    runtime: object
-    operator: object
-    controller: object
-    job_id: str = ""
-    directory: Path | None = None
-    cancelled: bool = False
-    progress_job_id: str = ""
-    progress: float = 0.0
+from contextlib import contextmanager
 
 
 def operator_properties(operator):
@@ -46,7 +29,7 @@ def _json_value(value):
         return value
 
 
-class JobOperatorBase:
+class JobOperator:
     """Blender mixin that turns one Operator into a complete remote Job."""
 
     bl_options = {"INTERNAL"}
@@ -74,145 +57,107 @@ class JobOperatorBase:
     def cleanup(self):
         """Release invocation resources after every terminal outcome."""
 
-    def controller(self, runtime):
-        """Return the operation controller used by this invocation."""
-        return runtime.server
-
     def execute(self, context):
-        runtime = self._runtime()
-        if runtime.active_job is not None:
-            self.report({"WARNING"}, "Another job is running")
-            return {"CANCELLED"}
-        if not self.job_type:
-            self.report({"ERROR"}, "Set job_type on the Job Operator")
-            return {"CANCELLED"}
+        self._cleaned = False
+        self._job = None
+        self._window_manager = getattr(context, "window_manager", None)
+        self._window = getattr(context, "window", None)
+        self._area = getattr(context, "area", None)
+        self._region = getattr(context, "region", None)
         try:
             parameters = self.request(context)
             if not isinstance(parameters, dict):
                 raise TypeError("request(context) must return a dict")
-            json.dumps(parameters)
-            controller = self.controller(runtime)
-        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self._job = self._runtime().submit(
+                self.job_type, parameters,
+                on_done=lambda job: self._complete(context, job),
+            )
+            self._job.message = self.starting_message
+            self._timer = context.window_manager.event_timer_add(self.poll_interval, window=context.window)
+            context.window_manager.modal_handler_add(self)
+        except Exception as error:
+            if self._job is not None:
+                self._job.cancel()
+            else:
+                self._cleanup_once()
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-
-        job = JobOperatorState(runtime, self, controller)
-        runtime.begin_job(job)
-        if hasattr(context.window_manager, "progress_begin"):
-            context.window_manager.progress_begin(0, 100)
-        runtime.update_ui(context, 0.0, self.starting_message)
-        self._timer = context.window_manager.event_timer_add(
-            self.poll_interval,
-            window=context.window,
-        )
-        context.window_manager.modal_handler_add(self)
-        try:
-            submitted = controller.submit(self.job_type, parameters)
-            job.job_id = submitted["job_id"]
-            job.directory = Path(submitted["directory"])
-        except (KeyError, OSError, RuntimeError, TypeError) as error:
-            return self._finish_failure(context, job, error)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        runtime = self._runtime()
-        job = runtime.active_job
-        if job is None or job.operator is not self:
-            self._remove_job_timer(context)
-            return {"CANCELLED"}
+        job = getattr(self, "_job", None)
+        if job is None or job.done:
+            self._remove_job_timer()
+            return {"FINISHED"} if job is not None and job.state == "succeeded" else {"CANCELLED"}
         if event.type == "ESC":
-            runtime.cancel_active()
-        if event.type != "TIMER":
-            return {"PASS_THROUGH"}
-        if job.cancelled and not job.job_id:
-            return self._finish_cancelled(context, job)
+            job.cancel()
+            return {"RUNNING_MODAL"}
+        return {"PASS_THROUGH"}
 
-        try:
-            status = job.controller.status(job.job_id)
-        except RuntimeError as error:
-            return self._finish_failure(context, job, error)
-        state = status.get("state")
-        if state == "succeeded":
-            return self._finish_success(context, job, status)
-        if state in {"failed", "cancelled"}:
-            if job.cancelled or state == "cancelled":
-                return self._finish_cancelled(context, job)
-            return self._finish_failure(
-                context,
-                job,
-                status.get("error") or "Server job failed",
-            )
-        self._update_from_job_status(context, job, status)
-        return {"RUNNING_MODAL"}
-
-    def _finish_success(self, context, job, status):
-        try:
-            self._end_job(context, job, status.get("message") or "Job complete", cancelled=False)
-            result = JobResult._from_status({
-                "job_id": job.job_id,
-                "directory": str(job.directory),
-                **status,
-            })
-            message = self.response(context, result)
-            if message:
-                self.report({"INFO"}, message)
-            return {"FINISHED"}
-        finally:
-            self.cleanup()
-
-    def _finish_failure(self, context, job, error):
-        try:
-            return self._finish_cancelled(context, job, "Job failed")
-        finally:
-            self.report({"ERROR"}, str(error))
-
-    def _finish_cancelled(self, context, job, message="Job cancelled"):
-        try:
-            self._end_job(context, job, message, cancelled=True)
-            return {"CANCELLED"}
-        finally:
-            self.cleanup()
-
-    def _end_job(self, context, job, message, *, cancelled):
-        job.runtime.finish_job(job)
-        try:
-            self._remove_job_timer(context)
-        finally:
-            if hasattr(context.window_manager, "progress_end"):
-                context.window_manager.progress_end()
-        job.runtime.update_ui(context, 0.0 if cancelled else 1.0, message)
-
-    def _update_from_job_status(self, context, job, status):
-        reported = min(max(float(status.get("progress", job.progress)), 0.0), 1.0)
-        progress_job_id = str(status.get("job_id") or job.job_id)
-        if progress_job_id != job.progress_job_id:
-            job.progress_job_id = progress_job_id
-            job.progress = reported
-        else:
-            job.progress = max(job.progress, reported)
-        message = str(status.get("message") or self.starting_message).strip()
-        job.runtime.update_ui(
-            context, job.progress, message,
-            message_args=status.get("message_args"), phase=status.get("phase"),
-        )
-
-    def _remove_job_timer(self, context):
-        timer = getattr(self, "_timer", None)
-        if timer is None:
+    @contextmanager
+    def _response_context(self, context):
+        if self._window is None:
+            yield context
             return
-        self._timer = None
-        context.window_manager.event_timer_remove(timer)
+        import bpy
+        if self._window not in bpy.context.window_manager.windows[:]:
+            raise RuntimeError("The task's original window is no longer available")
+        override = {"window": self._window}
+        if self._area is not None:
+            if self._area not in self._window.screen.areas[:]:
+                raise RuntimeError("The task's original area is no longer available")
+            override["area"] = self._area
+        if self._region is not None:
+            if self._area is None or self._region not in self._area.regions[:]:
+                raise RuntimeError("The task's original region is no longer available")
+            override["region"] = self._region
+        with bpy.context.temp_override(**override):
+            yield bpy.context
+
+    def _complete(self, context, job):
+        try:
+            if job.state == "succeeded":
+                with self._response_context(context) as response_context:
+                    message = self.response(response_context, job.result)
+                if message:
+                    self.report({"INFO"}, message)
+            elif job.state == "failed":
+                self.report({"ERROR"}, job.error or "Server job failed")
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            raise
+        finally:
+            try:
+                self._cleanup_once()
+            finally:
+                # A live window needs its next modal event to finish the handler.
+                if self._window is None or self._runtime()._closing:
+                    self._remove_job_timer()
+                else:
+                    import bpy
+                    if self._window not in bpy.context.window_manager.windows[:]:
+                        self._remove_job_timer()
+
+    def _cleanup_once(self):
+        if not self._cleaned:
+            self._cleaned = True
+            self.cleanup()
+
+    def _remove_job_timer(self):
+        timer = getattr(self, "_timer", None)
+        if timer is not None:
+            self._timer = None
+            try:
+                self._window_manager.event_timer_remove(timer)
+            except (ReferenceError, RuntimeError):
+                pass
 
     def cancel(self, context):
-        runtime = self._runtime()
-        job = runtime.active_job
-        if job is None or job.operator is not self:
-            self._remove_job_timer(context)
-            return
-        runtime.cancel_active()
-        self._finish_cancelled(context, job)
+        job = getattr(self, "_job", None)
+        if job is not None:
+            job.cancel()
 
     def _runtime(self):
         if self.job_runtime is None:
-            raise RuntimeError("Use JobRuntime.JobOperatorBase")
+            raise RuntimeError("Use runtime.JobOperator")
         return self.job_runtime

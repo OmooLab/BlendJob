@@ -1,4 +1,6 @@
 """Cover built-in translations independently of any consuming add-on."""
+from blendjob.jobs import Job
+import json
 from string import Formatter
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -27,6 +29,8 @@ def blender(monkeypatch):
         return message
 
     bpy = SimpleNamespace(
+        types=SimpleNamespace(STATUSBAR_HT_header=Mock()),
+        context=SimpleNamespace(window_manager=SimpleNamespace(windows=[])),
         app=SimpleNamespace(translations=SimpleNamespace(
             register=register, unregister=catalogs.pop, pgettext_iface=lookup,
         )),
@@ -37,12 +41,12 @@ def blender(monkeypatch):
 
 
 @pytest.mark.parametrize("source,args,expected", [
-    ("Preparing Server", {}, "正在准备服务器"),
-    ("Downloading packages (mirror) {count}", {"count": "4/10"}, "正在通过镜像下载依赖包 4/10"),
-    ("Downloading packages {count}", {"count": "4/10"}, "正在下载依赖包 4/10"),
-    ("Downloading uv (mirror) {rate}", {"rate": "1.2 MB/s"}, "正在通过镜像下载 uv 1.2 MB/s"),
-    ("Downloading Python {rate}", {"rate": "500 KB/s"}, "正在下载 Python 500 KB/s"),
-    ("Downloading Python (mirror)", {}, "正在通过镜像下载 Python"),
+    ("Preparing Server", {}, "服务器准备中"),
+    ("Downloading packages (mirror) {count}", {"count": "4/10"}, "依赖包下载中（镜像） 4/10"),
+    ("Downloading packages {count}", {"count": "4/10"}, "依赖包下载中 4/10"),
+    ("Downloading uv (mirror) {rate}", {"rate": "1.2 MB/s"}, "uv 下载中（镜像） 1.2 MB/s"),
+    ("Downloading Python {rate}", {"rate": "500 KB/s"}, "Python 下载中 500 KB/s"),
+    ("Downloading Python (mirror)", {}, "Python 下载中（镜像）"),
     ("Unknown diagnostic: {path}", {}, "Unknown diagnostic: {path}"),
     ("Downloading Python 500 KB/s", {}, "Downloading Python 500 KB/s"),
 ])
@@ -63,44 +67,47 @@ def test_runtime_translation_lifetimes_are_independent(blender, tmp_path, monkey
                 for name in ('first', 'second')]
     for runtime in runtimes:
         monkeypatch.setattr(runtime, 'operator_classes', lambda: ())
-        for name in ('enable', 'disable', '_ensure_status_bar_draw', '_remove_status_bar_draw'):
+        for name in ('enable', 'disable'):
             monkeypatch.setattr(runtime, name, Mock())
         runtime.register()
         runtime.register()
     assert len(catalogs) == 2
-    assert translate_progress('Installing environment') == '正在安装运行环境'
+    assert translate_progress('Installing environment') == '运行环境安装中'
     runtimes[0].unregister()
     runtimes[0].unregister()
     assert len(catalogs) == 1
-    assert translate_progress('Installing environment') == '正在安装运行环境'
+    assert translate_progress('Installing environment') == '运行环境安装中'
     runtimes[1].unregister()
     assert catalogs == {}
     assert translate_progress('Installing environment') == 'Installing environment'
 
 
-def test_status_bar_translates_at_draw_time_without_changing_messages(blender, tmp_path, monkeypatch):
+def test_sidebar_translates_at_draw_time_without_changing_messages(blender, tmp_path, monkeypatch):
     bpy, _catalogs, settings = blender
     bpy.app.translations.register('test', TRANSLATIONS)
     entrypoint = tmp_path / 'app.py'
     entrypoint.touch()
     runtime = JobRuntime(f'{entrypoint}:server', storage_root=tmp_path,
                          environment={'python': '3.12'}, namespace='test')
-    runtime.active_job = object()
+    job = Job(runtime, "work", {}, _job_id="job")
+    runtime.jobs.append(job)
     monkeypatch.setattr(runtime, 'redraw_ui', Mock())
     context = SimpleNamespace()
-    source = 'Installing Python ...'
-    runtime.update_ui(context, 0.25, source, phase={"index": 2, "total": 3})
+    source = 'Installing Python'
+    job.progress = 0.25
+    job.message = source
+    job.phase = {"index": 2, "total": 3}
     layout = Mock()
     layout.row.return_value = layout
     owner = SimpleNamespace(layout=layout)
-    runtime._draw_status_bar(owner, context)
-    assert layout.progress.call_args.kwargs['text'] == '2/3 正在安装 Python…'
+    runtime.draw_jobs(layout)
+    assert layout.progress.call_args.kwargs['text'] == '2/3 Python 安装中'
     settings['translate'] = False
-    runtime._draw_status_bar(owner, context)
+    runtime.draw_jobs(layout)
     assert layout.progress.call_args.kwargs['text'] == f'2/3 {source}'
-    assert runtime.message == f"2/3 {source}"
-    runtime.update_ui(context, 0.25, source)
-    assert runtime.message == source
+    assert job.text == f"2/3 {source}"
+    job.phase = None
+    assert job.text == source
 
 
 def test_catalog_preserves_format_fields():
@@ -123,10 +130,10 @@ def test_cleanup_translates_templates_before_formatting(blender, tmp_path, trans
     runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path,
                          environment={"python": "3.12"}, namespace="test")
     result = {"jobs": ["job"] * 12, "bytes": 3_500_000, "skipped": 1, "failed": ["busy"]}
-    cls = next(cls for cls in runtime.operator_classes() if cls.bl_idname.endswith(".clear_job_files"))
-    operator = SimpleNamespace(_preview=result, _action="clear_files", layout=Mock(), report=Mock())
+    cls = next(cls for cls in runtime.operator_classes() if cls.bl_idname.endswith(".confirm_clear_job_files"))
+    operator = SimpleNamespace(preview=json.dumps(result), layout=Mock(), report=Mock())
     cls.draw(operator, None)
-    cls.response(operator, None, SimpleNamespace(value=result))
+    cls.response(operator, None, result)
     assert operator.layout.label.call_args_list[0].kwargs == {
         "text": "删除 12 个任务（3.5 MB）？" if translated else "Delete 12 jobs (3.5 MB)?",
         "translate": False,
@@ -139,7 +146,6 @@ def test_cleanup_translates_templates_before_formatting(blender, tmp_path, trans
 def test_job_progress_reaches_blender_as_template_and_arguments(blender, tmp_path, monkeypatch):
     import json
     from blendjob.server import JobContext
-    from blendjob.operator import JobOperatorBase
 
     bpy, _catalogs, settings = blender
     bpy.app.translations.register("business", {"zh_HANS": {
@@ -153,31 +159,29 @@ def test_job_progress_reaches_blender_as_template_and_arguments(blender, tmp_pat
     context = JobContext("job", "example", {}, {}, tmp_path, tmp_path)
     context.progress(0.5, "Loading {model} {count:02d}", model="MoGe {raw}", count=3)
     status = json.loads(json.dumps(context._snapshot()))
-    job = SimpleNamespace(runtime=runtime, job_id="job", progress_job_id="", progress=0)
-    operator = JobOperatorBase()
-    operator._update_from_job_status(SimpleNamespace(), job, status)
-    assert runtime.message == "正在加载 MoGe {raw} 03"
+    job = Job(runtime, "work", {}, _job_id="job")
+    job._update(status)
+    assert job.text == "正在加载 MoGe {raw} 03"
     settings["translate"] = False
-    assert runtime.message == "Loading MoGe {raw} 03"
+    assert job.text == "Loading MoGe {raw} 03"
     settings["translate"] = True
     context.progress(0.5, "Loading {model} {count:02d}", model="MoGe {raw}", count=4)
-    operator._update_from_job_status(SimpleNamespace(), job, context._snapshot())
-    assert runtime.message == "正在加载 MoGe {raw} 04"
+    job._update(context._snapshot())
+    assert job.text == "正在加载 MoGe {raw} 04"
     context._request_cancel()
     assert not context._snapshot()["message_args"]
     context.progress(0.6, "Unknown diagnostic: {path}")
-    operator._update_from_job_status(SimpleNamespace(), job, context._snapshot())
-    assert runtime.message == "Unknown diagnostic: {path}"
+    job._update(context._snapshot())
+    assert job.text == "Unknown diagnostic: {path}"
     context._succeed()
     assert "message_args" not in context._snapshot()
 
 
 @pytest.mark.parametrize("mirror", [False, True])
-def test_installer_status_survives_maintenance_and_operator_forwarding(blender, tmp_path, monkeypatch, mirror):
+def test_installer_progress_reaches_runtime_operation(blender, job_runtime, tmp_path, mirror):
     import json
     from blendjob.installer.environment import write_status
     from blendjob.control_maintenance import MaintenanceOperation
-    from blendjob.operator import JobOperatorBase
 
     bpy, _catalogs, settings = blender
     bpy.app.translations.register("test", TRANSLATIONS)
@@ -189,17 +193,18 @@ def test_installer_status_survives_maintenance_and_operator_forwarding(blender, 
     operation.publish = Mock()
     operation.progress(status["progress"], status["message"],
                        message_args=status["message_args"], phase=status["phase"])
-    entrypoint = tmp_path / "app.py"
-    entrypoint.touch()
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path,
-                         environment={"python": "3.12"}, namespace="test")
-    monkeypatch.setattr(runtime, "redraw_ui", Mock())
-    job = SimpleNamespace(runtime=runtime, job_id="job", progress_job_id="", progress=0)
-    JobOperatorBase()._update_from_job_status(SimpleNamespace(), job, operation.state)
-    expected = "正在通过镜像下载 uv" if mirror else "正在下载 uv"
-    assert runtime.message == f"1/3 {expected} 75 KiB/s"
+    runtime = job_runtime
+    runtime._config.environment_ready.return_value = False
+    bpy.app.online_access = False
+    setup = runtime.setup()
+    runtime._tick()
+    runtime.server.states[setup.identifier] = operation.state
+    runtime._tick()
+    expected = "uv 下载中（镜像）" if mirror else "uv 下载中"
+    assert setup.text == f"1/3 {expected} 75 KiB/s"
     settings["translate"] = False
-    assert runtime.message == "1/3 " + source.format(rate="75 KiB/s")
+    assert setup.text == "1/3 " + source.format(rate="75 KiB/s")
     operation.progress(0.6, "Server is ready")
-    JobOperatorBase()._update_from_job_status(SimpleNamespace(), job, operation.state)
-    assert runtime.message == "Server is ready"
+    runtime.server.states[setup.identifier] = operation.state
+    runtime._tick()
+    assert setup.text == "Server is ready"

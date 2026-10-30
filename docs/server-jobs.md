@@ -11,9 +11,9 @@ from blendjob import JobServer
 server = JobServer("Image Tools")
 
 
-@server.job("resize-image")
+@server.job("resize_image")
 def resize_image(context, parameters):
-    source = parameters["input"]
+    source = parameters["input_path"]
     width = int(parameters["width"])
     context.progress(0.1, "Opening image")
 
@@ -28,7 +28,7 @@ def resize_image(context, parameters):
     return {"image": output.name, "width": width}
 ```
 
-`job_type` 是 Blender Operator 与 Handler 之间的稳定名称。`parameters` 是 Operator 提交的字典。
+`job_type` 是 Blender Operator 与 Handler 之间的稳定名称，使用小写 `snake_case`。`parameters` 是 Operator 提交的字典。
 
 ## JobContext
 
@@ -96,7 +96,7 @@ def unregister():
 
 已有翻译表的插件直接添加词条即可。`JobRuntime` 使用 Blender 的 `pgettext_iface()`，显示时先翻译模板，再填入参数，跟随当前界面语言和界面翻译开关。
 
-固定文字直接传入；带参数的文字保持模板原样，把格式化留给 Runtime。最新进度显示在 Blender 状态栏，同一个 Job 的界面进度保持单调递增。
+固定文字直接传入；带参数的文字保持模板原样，把格式化留给 Runtime。首个运行任务显示在 Blender 状态栏，`runtime.draw_jobs(layout)` 显示完整任务列表，同一个 Job 的界面进度保持单调递增。
 
 ## 响应取消
 
@@ -146,7 +146,7 @@ surface_path = result.file("surface")
 
 Job Server 使用单 Worker FIFO Queue。提交会立即返回 Job ID 和目录；空闲 Job 开始运行，其余 Job 按提交顺序排队。排队中与运行中的 Job 都可以接收取消请求。
 
-一个 Runtime 的交互式 Operator 同一时间管理一个活动调用。Server Queue 同时支持来自同步 `runtime.request()` 等其它调用路径的排队任务。
+一个 Runtime 可以同时管理多个交互式调用，每次调用独立保存进度、结果与取消状态。成功结果按提交顺序在主线程应用。
 
 ## 失败与日志
 

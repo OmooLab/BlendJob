@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from blendjob.server import JobServer
+from blendjob import JobServer
 
 
 class ServerTest(unittest.TestCase):

@@ -26,18 +26,17 @@ BlendJob adds FastAPI and Uvicorn for the Job Server. The bundled BlendJob wheel
 
 ## Install the environment
 
-`runtime.register()` provides two installation Operators:
+`runtime.register()` provides an installation Operator:
 
-- `<namespace>.install_environment`: use the official uv, Python, and PyPI sources
-- `<namespace>.install_environment_mirror`: use the OmooLab R2 uv and Python mirrors, and Tsinghua PyPI mirror
+`<namespace>.setup_server` opens setup with a **Use China Mirror** option. The default uses official uv, Python, and PyPI sources; the mirror option uses OmooLab R2 for uv and Python, and Tsinghua PyPI.
 
-Installation prepares uv, Python, and packages in order and displays live messages and progress in Blender's status bar. Source configuration applies only to the current installer subprocess.
+Installation prepares uv, Python, and packages in order and displays live messages and progress in the status bar. Source configuration applies only to the current installer subprocess.
 
-Online Access must be allowed in Blender Preferences. An extension UI can expose either or both installation actions according to its users' regions.
+Online Access must be allowed in Blender Preferences. Users select the download source in the setup dialog.
 
 ## Configuration changes
 
-The Runtime normalizes the environment declaration and calculates a stable hash. After installation, the manifest stores that hash. When Python, common packages, or platform packages change, `runtime.environment_ready()` returns `False`, allowing the UI to offer installation again.
+The Runtime normalizes the environment declaration and calculates a stable hash. After installation, the manifest stores that hash. When Python, common packages, or platform packages change, `runtime.state()` returns `UNAVAILABLE` during ordinary operation, allowing the UI to offer installation again.
 
 ## Storage Root
 

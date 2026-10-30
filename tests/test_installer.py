@@ -102,7 +102,7 @@ class EnvironmentInstallationTest(unittest.TestCase):
             self.assertNotIn("stage", final_status)
             self.assertNotIn("stages", final_status)
             self.assertEqual(final_status["progress"], 1.0)
-            self.assertEqual(final_status["message"], "Verifying installation ...")
+            self.assertEqual(final_status["message"], "Verifying installation")
             self.assertEqual(
                 install_python_environment.call_args.args[0],
                 [uv, "venv", "--clear", "--managed-python", "--python", "3.12", root / ".venv"],
@@ -270,10 +270,10 @@ class EnvironmentInstallationTest(unittest.TestCase):
             )
 
         messages = [item[1] for item in reports]
-        self.assertIn("Checking Python ...", messages)
+        self.assertIn("Checking Python", messages)
         self.assertIn("Downloading Python {rate}", messages)
         self.assertIn({"phase": 2, "rate": "75.0 KiB/s"}, [item[2] for item in reports])
-        self.assertIn("Installing Python ...", messages)
+        self.assertIn("Installing Python", messages)
         self.assertTrue(all(item[2]["phase"] == 2 for item in reports))
 
 
@@ -308,8 +308,8 @@ class EnvironmentInstallationTest(unittest.TestCase):
             )
 
         messages = [item[1] for item in reports]
-        self.assertIn("Resolving packages (mirror) ...", messages)
+        self.assertIn("Resolving packages (mirror)", messages)
         self.assertIn("Downloading packages (mirror) {count}", messages)
         self.assertIn({"phase": 3, "count": "2/40"}, [item[2] for item in reports])
-        self.assertIn("Installing packages ...", messages)
+        self.assertIn("Installing packages", messages)
         self.assertTrue(all(item[2]["phase"] == 3 for item in reports))

@@ -59,7 +59,7 @@ Model files live in persistent storage, while sessions live in Server memory. Th
 ## 3. Register a model download job
 
 ```python
-@server.job("download-model")
+@server.job("download_model")
 def download_model_job(context, parameters):
     manager = context.resource("models")
 
@@ -75,14 +75,11 @@ Modeling downloads as jobs gives Blender consistent progress, cancellation, erro
 
 ## 4. Prepare a default model after installation
 
-Provide `post_install` when the extension should be ready with a default model:
+Provide `post_setup` when the extension should be ready with a default model:
 
 ```python
-def post_install(runtime):
-    runtime.request(
-        "download-model",
-        {"model": "depth-v1"},
-    )
+def post_setup(runtime):
+    runtime.submit("download_model", {"model": "depth-v1"})
 
 
 runtime = JobRuntime(
@@ -90,19 +87,19 @@ runtime = JobRuntime(
     entrypoint_root=Path(__file__).parent,
     storage_root=Path.home() / ".my-addon",
     environment=environment,
-    post_install=post_install,
+    post_setup=post_setup,
     namespace="my_addon",
 )
 ```
 
-After the environment is ready and the Server can start, BlendJob runs `post_install(runtime)` in the background. Progress from the model-download job continues in the status bar. The installation Operator finishes after default-model preparation.
+After setup, BlendJob calls `post_setup(runtime)` on the main thread. Submit the model download job directly; its progress appears in `runtime.draw_jobs(layout)` and the status bar.
 
-For user-selected, on-demand models, omit `post_install` and invoke the same `download-model` job from a model-management panel.
+For user-selected, on-demand models, omit `post_setup` and invoke the same `download_model` job from a model-management panel.
 
 ## 5. Register an inference job
 
 ```python
-@server.job("estimate-depth")
+@server.job("estimate_depth")
 def estimate_depth(context, parameters):
     models = context.resource("models")
     context.progress(0.1, "Loading model")
@@ -110,7 +107,7 @@ def estimate_depth(context, parameters):
     context.check_cancelled()
 
     context.progress(0.3, "Running inference")
-    depth = run_depth(session, parameters["input"])
+    depth = run_depth(session, parameters["input_path"])
 
     output = context.directory / "depth.npz"
     save_depth(output, depth)
@@ -122,10 +119,10 @@ The model session loads on first use and is reused by later jobs.
 ## 6. Submit from Blender and import the result
 
 ```python
-class EstimateDepth(JobOperatorBase, bpy.types.Operator):
+class EstimateDepth(JobOperator, bpy.types.Operator):
     bl_idname = "my_addon.estimate_depth"
     bl_label = "Estimate Depth"
-    job_type = "estimate-depth"
+    job_type = "estimate_depth"
 
     input_path: bpy.props.StringProperty(subtype="FILE_PATH")
     model: bpy.props.StringProperty(default="depth-v1")

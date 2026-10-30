@@ -17,7 +17,7 @@ The factory runs after the Runtime binds the Storage Root, so it can create proj
 ## Use it in a Handler
 
 ```python
-@server.job("run-inference")
+@server.job("run_inference")
 def run_inference(context, parameters):
     manager = context.resource("model_manager")
     model = manager.get(parameters["model"])

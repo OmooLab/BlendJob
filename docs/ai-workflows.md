@@ -59,7 +59,7 @@ def create_models(job_server):
 ## 3. 注册模型下载 Job
 
 ```python
-@server.job("download-model")
+@server.job("download_model")
 def download_model_job(context, parameters):
     manager = context.resource("models")
 
@@ -75,14 +75,11 @@ def download_model_job(context, parameters):
 
 ## 4. 在安装后准备默认模型
 
-需要开箱即用的默认模型时，为 Runtime 提供 `post_install`：
+需要开箱即用的默认模型时，为 Runtime 提供 `post_setup`：
 
 ```python
-def post_install(runtime):
-    runtime.request(
-        "download-model",
-        {"model": "depth-v1"},
-    )
+def post_setup(runtime):
+    runtime.submit("download_model", {"model": "depth-v1"})
 
 
 runtime = JobRuntime(
@@ -90,19 +87,19 @@ runtime = JobRuntime(
     entrypoint_root=Path(__file__).parent,
     storage_root=Path.home() / ".my-addon",
     environment=environment,
-    post_install=post_install,
+    post_setup=post_setup,
     namespace="my_addon",
 )
 ```
 
-Environment 就绪并且 Server 可以启动后，BlendJob 在后台执行 `post_install(runtime)`。模型下载 Job 的进度会继续显示在状态栏。安装 Operator 会在默认模型准备完成后结束。
+安装完成后，BlendJob 在主线程调用 `post_setup(runtime)`。直接提交模型下载 Job，进度由 `runtime.draw_jobs(layout)` 和状态栏显示。
 
-如果产品希望用户按需选择模型，可以省略 `post_install`，在模型管理面板中调用同一个 `download-model` Job。
+如果产品希望用户按需选择模型，可以省略 `post_setup`，在模型管理面板中调用同一个 `download_model` Job。
 
 ## 5. 注册推理 Job
 
 ```python
-@server.job("estimate-depth")
+@server.job("estimate_depth")
 def estimate_depth(context, parameters):
     models = context.resource("models")
     context.progress(0.1, "Loading model")
@@ -110,7 +107,7 @@ def estimate_depth(context, parameters):
     context.check_cancelled()
 
     context.progress(0.3, "Running inference")
-    depth = run_depth(session, parameters["input"])
+    depth = run_depth(session, parameters["input_path"])
 
     output = context.directory / "depth.npz"
     save_depth(output, depth)
@@ -122,10 +119,10 @@ def estimate_depth(context, parameters):
 ## 6. 从 Blender 提交并导入结果
 
 ```python
-class EstimateDepth(JobOperatorBase, bpy.types.Operator):
+class EstimateDepth(JobOperator, bpy.types.Operator):
     bl_idname = "my_addon.estimate_depth"
     bl_label = "Estimate Depth"
-    job_type = "estimate-depth"
+    job_type = "estimate_depth"
 
     input_path: bpy.props.StringProperty(subtype="FILE_PATH")
     model: bpy.props.StringProperty(default="depth-v1")

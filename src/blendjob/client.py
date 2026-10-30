@@ -3,6 +3,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 
+class JobTransportError(RuntimeError):
+    """The server response was not received; task acceptance is unknown."""
+
+
 class JobClient:
     """Dependency-free HTTP client for a local :class:`JobServer`."""
 
@@ -36,7 +40,7 @@ class JobClient:
                 detail = None
             raise RuntimeError(detail or f"Job Server returned HTTP {error.code}")
         except (OSError, URLError) as error:
-            raise RuntimeError(f"Unable to reach Job Server: {error}")
+            raise JobTransportError(f"Unable to reach Job Server: {error}")
 
     def health(self):
         return self.request("GET", "/health")

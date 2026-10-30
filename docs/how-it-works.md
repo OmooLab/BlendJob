@@ -24,12 +24,12 @@ Blender 进程保持轻量，只加载 BlendJob Client 和插件 UI 代码。Ser
 
 ## 一次 Job 的流程
 
-1. 用户执行继承自 `JobOperatorBase` 的业务 Operator。
+1. 用户执行继承自 `JobOperator` 的业务 Operator。
 2. Operator 的 `request()` 生成 JSON 参数。
 3. Runtime 确认本地 Server 可用并提交 Job。
 4. Server 立即分配 Job ID 与工作目录，并把 Job 放入 FIFO Queue。
 5. Handler 执行任务，通过 `context.progress()` 发布状态。
-6. Runtime 轮询状态，并更新 Blender 状态栏。
+6. Runtime 轮询状态，并更新 Blender 状态栏和 `runtime.draw_jobs(layout)` 绘制的任务列表。
 7. Handler 返回结果后，Runtime 在 Blender 主线程调用 `response()`。
 8. `cleanup()` 完成这次调用的资源清理。
 

@@ -12,74 +12,104 @@ def translate_progress(message, message_args=None):
     return translated.format(**message_args) if message_args else translated
 
 
-_ZH_HANS = {
-    'Job queued': '任务已排队',
-    'Cancelling job': '正在取消任务',
-    'Ready': '就绪',
-    'Starting job': '正在启动任务',
-    'Job complete': '任务已完成',
-    'Job cancelled': '任务已取消',
-    'Job failed': '任务失败',
-    'Preparing Server': '正在准备服务器',
-    'Migrating Folder': '正在迁移文件夹',
-    'Stopping Server': '正在停止服务器',
-    'Saving Server location': '正在保存服务器位置',
-    'Server is ready': '服务器已就绪',
-    'Migrating Server files': '正在迁移文件夹中的文件',
-    'Removing the old Server folder': '正在移除旧服务器文件夹',
-    'Installing environment': '正在安装运行环境',
-    'Starting installation ...': '正在开始安装…',
-    'Starting uv download ...': '正在开始下载 uv…',
-    'Installing uv ...': '正在安装 uv…',
-    'Checking Python ...': '正在检查 Python…',
-    'Installing Python ...': '正在安装 Python…',
-    'Resolving packages ...': '正在解析依赖包…',
-    'Resolving packages (mirror) ...': '正在通过镜像解析依赖包…',
-    'Installing packages ...': '正在安装依赖包…',
-    'Verifying installation ...': '正在验证安装…',
-    'Environment installation failed': '运行环境安装失败',
-    'Downloading packages {count}': '正在下载依赖包 {count}',
-    'Downloading packages (mirror) {count}': '正在通过镜像下载依赖包 {count}',
-    'Delete Files': '删除文件',
-    'Permanently delete job outputs and logs.': '永久删除任务输出和日志。',
-    'No unused job files to clear': '没有可清理的闲置任务文件',
-    'Set Up Server': '设置服务器',
-    'Migrate Folder': '迁移文件夹',
-    'Clear Job Files': '清理任务文件',
-    'Cancel Job': '取消任务',
+# 服务器状态与控制
+SERVER_MESSAGES = {
+    'Idle': '空闲',
+    'Starting': '启动中',
+    'Processing': '处理中',
+    'Stopping': '停止中',
+    'Offline': '未启动',
+    'Server error': '服务器错误',
+    'Environment is not installed': '尚未安装运行环境',
     'Start Server': '启动服务器',
     'Stop Server': '停止服务器',
     'Restart Server': '重启服务器',
     'Open Server Log': '打开服务器日志',
-    'Starting': '启动中',
-    'Stopping': '停止中',
-    'Stopped': '已停止',
-    'Environment is not installed': '尚未安装运行环境',
+    'Control process exited': '控制进程已退出',
+}
+
+
+# 任务生命周期
+JOB_MESSAGES = {
+    'Job queued': '等待中',
+    'Starting job': '任务启动中',
+    'Cancel Job': '取消任务',
+    'Cancelling job': '取消中',
+    'Job complete': '任务已完成',
+    'Job cancelled': '任务已取消',
+    'Job failed': '任务失败',
+    'Another job is running': '另一个任务正在运行',
+}
+
+
+# 环境安装
+INSTALLATION_MESSAGES = {
+    'Set Up Server': '设置服务器',
     'Server Location': '服务器位置',
     'Use China Mirror': '使用中国镜像',
-    'Busy': '忙碌',
-    'Control process exited': '控制进程已退出',
-    'Another job is running': '另一个任务正在运行',
-    'Folder migration completed': '文件夹迁移已完成',
-    'Job files inspected': '任务文件已检查',
-    'Reading job files': '正在读取任务文件',
     'Online Access is disabled': '网络访问已禁用',
+    'Preparing Server': '服务器准备中',
+    'Installing environment': '运行环境安装中',
+    'Starting installation': '安装启动中',
+    'Starting uv download': 'uv 下载启动中',
+    'Downloading uv': 'uv 下载中',
+    'Downloading uv {rate}': 'uv 下载中 {rate}',
+    'Downloading uv (mirror)': 'uv 下载中（镜像）',
+    'Downloading uv (mirror) {rate}': 'uv 下载中（镜像） {rate}',
+    'Installing uv': 'uv 安装中',
+    'Checking Python': 'Python 检查中',
+    'Downloading Python': 'Python 下载中',
+    'Downloading Python {rate}': 'Python 下载中 {rate}',
+    'Downloading Python (mirror)': 'Python 下载中（镜像）',
+    'Downloading Python (mirror) {rate}': 'Python 下载中（镜像） {rate}',
+    'Installing Python': 'Python 安装中',
+    'Resolving packages': '依赖包解析中',
+    'Resolving packages (mirror)': '依赖包解析中（镜像）',
+    'Downloading packages {count}': '依赖包下载中 {count}',
+    'Downloading packages (mirror) {count}': '依赖包下载中（镜像） {count}',
+    'Installing packages': '依赖包安装中',
+    'Verifying installation': '安装验证中',
+    'Server is ready': '服务器已就绪',
+    'Environment installation failed': '运行环境安装失败',
+}
+
+
+# 服务器目录迁移
+MIGRATION_MESSAGES = {
+    'Migrate Storage': '迁移存储',
+    'Migrating Folder': '文件夹迁移中',
+    'Stopping Server': '服务器停止中',
+    'Migrating Server files': '服务器文件迁移中',
+    'Saving Server location': '服务器位置保存中',
+    'Removing the old Server folder': '旧服务器文件夹移除中',
+    'Folder migration completed': '文件夹迁移已完成',
+}
+
+
+# 任务文件清理
+JOB_FILE_MESSAGES = {
+    'Clear Job Files': '清理任务文件',
+    'Reading job files': '任务文件读取中',
+    'Deleting job files': '任务文件删除中',
+    'Job files inspected': '任务文件已检查',
+    'No unused job files to clear': '没有可清理的闲置任务文件',
+    'Delete Files': '删除文件',
+    'Permanently delete job outputs and logs.': '永久删除任务输出和日志。',
     'Delete {count} jobs ({size} MB)?': '删除 {count} 个任务（{size} MB）？',
     'Deleted {count} jobs ({size} MB); kept {kept}': '已删除 {count} 个任务（{size} MB）；保留 {kept} 个',
-    'Downloading uv': '正在下载 uv',
-    'Downloading uv {rate}': '正在下载 uv {rate}',
-    'Downloading uv (mirror)': '正在通过镜像下载 uv',
-    'Downloading uv (mirror) {rate}': '正在通过镜像下载 uv {rate}',
-    'Downloading Python': '正在下载 Python',
-    'Downloading Python {rate}': '正在下载 Python {rate}',
-    'Downloading Python (mirror)': '正在通过镜像下载 Python',
-    'Downloading Python (mirror) {rate}': '正在通过镜像下载 Python {rate}',
 }
 
 TRANSLATIONS = {
     "zh_HANS": {
         (context, message): translation
-        for message, translation in _ZH_HANS.items()
-        for context in ("*", "Operator")
+        for messages in (
+            SERVER_MESSAGES,
+            JOB_MESSAGES,
+            INSTALLATION_MESSAGES,
+            MIGRATION_MESSAGES,
+            JOB_FILE_MESSAGES,
+        )
+        for message, translation in messages.items()
+        for context in ("*", "Operator", "BlendJob")
     },
 }

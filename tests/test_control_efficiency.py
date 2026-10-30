@@ -3,6 +3,7 @@ from concurrent.futures import Future
 import os
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+import pytest
 
 from blendjob.control import ControlService
 from blendjob.storage import write_json
@@ -20,7 +21,7 @@ def service_at(tmp_path):
 
 def test_unchanged_progress_is_not_republished_and_terminal_status_is_kept(tmp_path):
     service = service_at(tmp_path)
-    service.server = Mock(snapshot={"state": "BUSY"})
+    service.server = Mock(snapshot={"state": "PROCESSING"})
     status = {"state": "running", "progress": 0.5, "message": "Working"}
     with patch("blendjob.control.write_json") as write:
         for _ in range(20):
@@ -63,7 +64,7 @@ def test_idle_health_checks_follow_backend_interval_without_scanning_directory(t
             pass
 
     service.parent = SimpleNamespace(poll=lambda: None if now < 11 else 0)
-    service.server = Mock(snapshot={"state": "READY"}, poll=poll)
+    service.server = Mock(snapshot={"state": "IDLE"}, poll=poll)
     with (
         patch("blendjob.control.ThreadPoolExecutor", Executor),
         patch("blendjob.control.time.sleep", sleep),
@@ -76,3 +77,19 @@ def test_idle_health_checks_follow_backend_interval_without_scanning_directory(t
     assert all(later - earlier >= 5 for earlier, later in zip(checks, checks[1:]))
     assert write.call_count == 1
     service.server.stop.assert_called_once()
+
+
+@pytest.mark.parametrize("action,message", [("preview_files", "Reading job files"), ("clear_files", "Deleting job files")])
+def test_file_operations_publish_their_own_activity(tmp_path, action, message):
+    service = service_at(tmp_path)
+    client = Mock()
+    def request(*args):
+        assert service.states["operation"]["message"] == message
+        return {"jobs": []}
+    client.preview_job_files.side_effect = request
+    client.clear_job_files.side_effect = request
+    service.server = Mock(snapshot={"state": "IDLE"})
+    service.server.ensure.return_value = SimpleNamespace(client=client, instance_id="server")
+    service.execute({"id": "operation", "sequence": 1, "action": action,
+                     "parameters": {"jobs": [], "instance_id": "server"}})
+    assert service.states["operation"]["state"] == "succeeded"

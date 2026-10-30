@@ -17,7 +17,7 @@ def create_model_manager(job_server):
 ## 在 Handler 中使用
 
 ```python
-@server.job("run-inference")
+@server.job("run_inference")
 def run_inference(context, parameters):
     manager = context.resource("model_manager")
     model = manager.get(parameters["model"])

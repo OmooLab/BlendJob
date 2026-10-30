@@ -80,7 +80,7 @@ class ServerProcessLifecycleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             entrypoint = root / "entrypoint.py"
-            entrypoint.write_text("from blendjob.server import JobServer\nserver=JobServer('Recovery Test')\n", encoding="utf-8")
+            entrypoint.write_text("from blendjob import JobServer\nserver=JobServer('Recovery Test')\n", encoding="utf-8")
             config = ServerConfiguration(f"{entrypoint}:server", {"python": f"{sys.version_info.major}.{sys.version_info.minor}"})
             server = config.server_controller(root, directory_lock=StorageLock())
             with patch("blendjob.configuration.environment_python", return_value=Path(sys.executable)):
@@ -122,3 +122,20 @@ class ServerProcessLifecycleTest(unittest.TestCase):
             finally:
                 if parent.poll() is None:
                     terminate_process_tree(parent)
+
+
+@pytest.mark.parametrize("stage", ["submit", "status"])
+def test_transient_timeout_keeps_same_job_and_does_not_cancel(tmp_path, stage):
+    from blendjob.client import JobTransportError
+    server = ServerController(Mock(), cwd_factory=lambda: tmp_path, log_path_factory=lambda: tmp_path / "server.log")
+    client = Mock()
+    client.status.return_value = {"state": "succeeded", "result": {"ok": True}}
+    if stage == "submit":
+        client.submit.side_effect = [JobTransportError("timed out"), {}]
+    else:
+        client.status.side_effect = [JobTransportError("timed out"), {"state": "succeeded"}]
+    server.ensure = Mock(return_value=Mock(client=client))
+    identifier = "b" * 32
+    assert server.run_job("example", {}, job_id=identifier)["state"] == "succeeded"
+    client.cancel.assert_not_called()
+    assert all(call.kwargs["job_id"] == identifier for call in client.submit.call_args_list)

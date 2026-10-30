@@ -9,7 +9,7 @@ BlendJob 帮助 Blender Extension 把耗时 Python 任务运行在独立进程�
 - Blender Operator：收集参数，并在 Blender 主线程应用结果
 - Server Handler：执行计算，报告进度并写出结果
 
-`JobRuntime` 把两段代码连接起来，并管理 Environment 安装、本地 Server、FIFO Queue、状态栏进度、取消、日志与 Job 工作目录。
+`JobRuntime` 把两段代码连接起来，并管理 Environment 安装、本地 Server、FIFO Queue、任务进度、取消、日志与 Job 工作目录。
 
 ```mermaid
 flowchart LR
@@ -41,7 +41,7 @@ flowchart LR
 | 对象 | 使用位置 | 职责 |
 | --- | --- | --- |
 | `JobRuntime` | Blender 进程 | 配置并管理 Environment、Server、Operator 与 UI 状态 |
-| `JobOperatorBase` | Blender 进程 | 将业务 Operator 变成异步 Modal Job |
+| `JobOperator` | Blender 进程 | 将业务 Operator 变成异步 Modal Job |
 | `JobServer` | Server 进程 | 注册 Handler 与 Resource，按队列执行 Job |
 | `JobContext` | Server Handler | 提供进度、取消、工作目录与 Resource |
 | `JobResult` | Blender 进程 | 提供成功返回值与安全的输出文件访问 |

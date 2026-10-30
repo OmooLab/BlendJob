@@ -26,18 +26,17 @@ BlendJob 会加入运行 Job Server 所需的 FastAPI 与 Uvicorn。随 Extensio
 
 ## 安装 Environment
 
-`runtime.register()` 提供两个安装 Operator：
+`runtime.register()` 提供安装 Operator：
 
-- `<namespace>.install_environment`：使用官方 uv、Python 与 PyPI 下载源
-- `<namespace>.install_environment_mirror`：使用 OmooLab R2 的 uv 与 Python 镜像与清华 PyPI
+`<namespace>.setup_server` 打开设置窗口，通过「Use China Mirror」选择下载源。默认使用官方 uv、Python 与 PyPI；启用镜像后使用 OmooLab R2 的 uv、Python 镜像与清华 PyPI。
 
 安装过程依次准备 uv、Python 和 packages，并把实时消息与进度显示在 Blender 状态栏。安装源配置只作用于当前安装子进程。
 
-Blender Preferences 中的 Online Access 需要处于允许状态。你可以根据用户区域在 Extension UI 中提供其中一个或两个安装入口。
+Blender Preferences 中的 Online Access 需要处于允许状态。用户在安装对话框中选择下载源。
 
 ## 配置变化
 
-Runtime 会规范化 Environment 声明并计算稳定 Hash。成功安装后，Manifest 保存这个 Hash。当 Python、通用 packages 或平台 packages 改变时，`runtime.environment_ready()` 会返回 `False`，UI 可以再次显示安装按钮。
+Runtime 会规范化 Environment 声明并计算稳定 Hash。成功安装后，Manifest 保存这个 Hash。当 Python、通用 packages 或平台 packages 改变时，`runtime.state()` 在普通运行时返回 `UNAVAILABLE`，UI 可以再次显示安装按钮。
 
 ## Storage Root
 

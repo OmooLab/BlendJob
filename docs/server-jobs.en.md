@@ -11,9 +11,9 @@ from blendjob import JobServer
 server = JobServer("Image Tools")
 
 
-@server.job("resize-image")
+@server.job("resize_image")
 def resize_image(context, parameters):
-    source = parameters["input"]
+    source = parameters["input_path"]
     width = int(parameters["width"])
     context.progress(0.1, "Opening image")
 
@@ -28,7 +28,7 @@ def resize_image(context, parameters):
     return {"image": output.name, "width": width}
 ```
 
-The `job_type` is the stable name shared by the Blender Operator and Handler. `parameters` is the dictionary submitted by the Operator.
+The `job_type` is the stable name shared by the Blender Operator and Handler, written in lowercase `snake_case`. `parameters` is the dictionary submitted by the Operator.
 
 ## JobContext
 
@@ -96,7 +96,7 @@ def unregister():
 
 Add-ons with an existing translation table only need to add the entries. `JobRuntime` uses Blender's `pgettext_iface()` to translate the template before filling in parameters at display time, following the current interface language and interface translation setting.
 
-Pass fixed text directly. Keep parameterized templates intact and let the Runtime format them. The latest progress appears in Blender's status bar, and UI progress remains monotonic for one job.
+Pass fixed text directly. Keep parameterized templates intact and let the Runtime format them. The first running job appears in the status bar; `runtime.draw_jobs(layout)` displays the full list, and UI progress remains monotonic for one job.
 
 ## Respond to cancellation
 
@@ -146,7 +146,7 @@ This keeps invocation files separate and lets Blender verify that a result belon
 
 The Job Server uses a single-worker FIFO queue. Submission immediately returns a job ID and directory. An idle job begins running, and later jobs wait in submission order. Both queued and running jobs can receive cancellation requests.
 
-One Runtime manages one active interactive Operator invocation at a time. The Server queue can also accept jobs from other call paths, including synchronous `runtime.request()` calls.
+One Runtime manages multiple interactive invocations, each with independent progress, results, and cancellation. Successful results are applied on the main thread in submission order.
 
 ## Failures and logs
 

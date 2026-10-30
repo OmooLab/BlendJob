@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .configuration import ServerConfiguration
+from .operations import MAINTENANCE_MESSAGES
 from .control_maintenance import SetupOperation, MigrateOperation, CommitUncertain
 from .processes import RegisteredServerProcess
 from .storage import StorageLock, read_json, write_json
@@ -45,7 +46,8 @@ class ControlService:
         try:
             if self.cancelled(identifier):
                 raise RuntimeError("Operation cancelled")
-            self.publish(identifier, {"state": "running", "progress": 0.0, "message": "Starting job"})
+            self.publish(identifier, {"state": "running", "progress": 0.0,
+                                      "message": MAINTENANCE_MESSAGES.get(action, "Starting job")})
             if action == "job":
                 result = self.job(identifier, parameters)
             elif action in {"setup", "migrate"}:
@@ -159,11 +161,10 @@ class ControlService:
                     if command["action"] == "release":
                         released.add(command["parameters"]["job_id"])
                         continue
-                    if command["action"] in {"start", "stop", "restart"}:
-                        released.add(command["id"])
-                    if command["action"] == "stop":
+                    if command["action"] in {"stop", "restart", "migrate"}:
                         for identifier in pending:
                             (self.directory / f"cancel-{identifier}").touch()
+                    self.publish(command["id"], {"state": "queued", "progress": 0.0, "message": "Job queued"})
                     pending[command["id"]] = executor.submit(self.execute, command)
                 for identifier, future in tuple(pending.items()):
                     if future.done():

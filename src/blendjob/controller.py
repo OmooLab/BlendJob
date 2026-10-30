@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from .client import JobClient
+from .client import JobClient, JobTransportError
 from .processes import RegisteredServerProcess, terminate_process_tree
 
 SERVER_DIRECTORY_LOCKS = {}
@@ -46,7 +46,7 @@ class ServerController:
         self.process = None
         self.log_file = None
         self.auto_start = False
-        self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+        self.snapshot = {"state": "OFFLINE", "message": "Offline"}
 
     def start(self):
         if self.process is None:
@@ -99,11 +99,11 @@ class ServerController:
         health = self.connection.client.request("GET", "/health", timeout=timeout)
         if health.get("instance_id") != self.connection.instance_id:
             raise RuntimeError("Server instance does not match")
-        state = "BUSY" if health.get("busy") else "READY"
+        state = "PROCESSING" if health.get("busy") else "IDLE"
         self.snapshot = {
             **health,
             "state": state,
-            "message": "Busy" if state == "BUSY" else "Ready",
+            "message": "Processing" if state == "PROCESSING" else "Idle",
             "port": self.connection.port,
         }
         return health
@@ -158,7 +158,7 @@ class ServerController:
                 registered_lock.release()
         if self.directory_lock is not None:
             self.directory_lock.release()
-        self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+        self.snapshot = {"state": "OFFLINE", "message": "Offline"}
 
     def _recover_connection(self):
         root = Path(self.log_path_factory()).parent.resolve()
@@ -200,7 +200,16 @@ class ServerController:
         try:
             if cancel_check is not None and cancel_check():
                 raise RuntimeError("Operation cancelled")
-            client.submit(job_type, parameters, job_id=job_id)
+            deadline = time.monotonic() + 60
+            while True:
+                try:
+                    client.submit(job_type, parameters, job_id=job_id)
+                    break
+                except JobTransportError:
+                    if time.monotonic() >= deadline or (cancel_check and cancel_check()):
+                        raise
+                    time.sleep(0.1)
+            deadline = time.monotonic() + 60
             while True:
                 if cancellation_deadline is None and cancel_check is not None and cancel_check():
                     cancellation_deadline = time.monotonic() + 5
@@ -209,8 +218,15 @@ class ServerController:
                     self.stop()
                     status = {**submitted, "state": "cancelled", "message": "Job cancelled"}
                 else:
-                    status = {**submitted, **client.status(job_id)}
-                    self.snapshot = {**self.snapshot, "state": "BUSY", "busy": True,
+                    try:
+                        status = {**submitted, **client.status(job_id)}
+                        deadline = time.monotonic() + 60
+                    except JobTransportError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.1)
+                        continue
+                    self.snapshot = {**self.snapshot, "state": "PROCESSING", "busy": True,
                                      "active_job": status}
                 finished = status.get("state") in {"succeeded", "failed", "cancelled"}
                 if progress is not None:
@@ -242,7 +258,7 @@ class ServerController:
         except RuntimeError as error:
             self._close_finished_process()
             if not self.auto_start:
-                self.snapshot = {"state": "STOPPED", "message": "Stopped"}
+                self.snapshot = {"state": "OFFLINE", "message": "Offline"}
                 if self.directory_lock is not None:
                     self.directory_lock.release()
                 return 2.0
@@ -258,13 +274,13 @@ class ServerController:
         active = self.snapshot.get("active_job")
         if active and active.get("job_id") != job_id:
             return
-        if self.snapshot.get("state") == "BUSY":
+        if self.snapshot.get("state") == "PROCESSING":
             self.snapshot = {
                 **self.snapshot,
                 "busy": False,
                 "active_job": None,
-                "state": "READY",
-                "message": "Ready",
+                "state": "IDLE",
+                "message": "Idle",
             }
 
     def _available_port(self):

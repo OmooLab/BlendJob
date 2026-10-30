@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+from .jobs import BUILTIN_OPERATIONS, validate_job_name
+
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled"})
 _NO_RESULT = object()
@@ -263,6 +265,9 @@ class JobServer:
 
     def job(self, job_type):
         """Register ``handler(context, parameters)`` for a public job type."""
+        validate_job_name(job_type)
+        if job_type in BUILTIN_OPERATIONS:
+            raise ValueError(f"Job name is reserved by BlendJob: {job_type}")
         def register(handler):
             if job_type in self.handlers:
                 raise ValueError(f"Job type is already registered: {job_type}")
@@ -299,7 +304,10 @@ class JobServer:
             if self.closed:
                 raise RuntimeError("Job Server is closed")
             if job_id in self.jobs:
-                raise ValueError(f"Job id already exists: {job_id}")
+                existing = self.jobs[job_id]
+                if existing.job_type != job_type or existing._parameters != parameters:
+                    raise ValueError(f"Job id already exists with different parameters: {job_id}")
+                return existing
             self.jobs_directory.mkdir(parents=True, exist_ok=True)
             directory = self.jobs_directory / job_id
             try:

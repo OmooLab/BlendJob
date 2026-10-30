@@ -24,12 +24,12 @@ The Blender process stays lightweight and loads the BlendJob Client plus extensi
 
 ## One job from start to finish
 
-1. The user runs an application Operator derived from `JobOperatorBase`.
+1. The user runs an application Operator derived from `JobOperator`.
 2. The Operator's `request()` creates JSON parameters.
 3. The Runtime ensures that the local Server is available and submits the job.
 4. The Server immediately assigns a job ID and directory and places the job in its FIFO queue.
 5. The Handler performs the work and publishes state through `context.progress()`.
-6. The Runtime polls job state and updates Blender's status bar.
+6. The Runtime polls job state and updates the status bar and any job list drawn with `runtime.draw_jobs(layout)`.
 7. After the Handler returns, the Runtime calls `response()` on Blender's main thread.
 8. `cleanup()` releases invocation-specific resources.
 

@@ -9,7 +9,7 @@ A BlendJob feature usually contains two pieces of application code:
 - A Blender Operator that collects parameters and applies results on Blender's main thread
 - A Server Handler that performs computation, reports progress, and writes outputs
 
-`JobRuntime` connects them and manages environment installation, the local server, FIFO scheduling, status-bar progress, cancellation, logs, and job directories.
+`JobRuntime` connects them and manages environment installation, the local server, FIFO scheduling, job progress, cancellation, logs, and job directories.
 
 ```mermaid
 flowchart LR
@@ -41,7 +41,7 @@ Continue with the topic guides when you need more:
 | Object | Process | Responsibility |
 | --- | --- | --- |
 | `JobRuntime` | Blender | Configure and manage the environment, server, Operators, and UI state |
-| `JobOperatorBase` | Blender | Turn an application Operator into an asynchronous modal job |
+| `JobOperator` | Blender | Turn an application Operator into an asynchronous modal job |
 | `JobServer` | Server | Register Handlers and Resources and execute jobs in order |
 | `JobContext` | Server Handler | Provide progress, cancellation, job storage, and Resources |
 | `JobResult` | Blender | Provide a successful value and safe access to output files |

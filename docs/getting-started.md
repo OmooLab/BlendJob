@@ -87,10 +87,10 @@ runtime = JobRuntime(
 ```python
 import bpy
 
-JobOperatorBase = runtime.JobOperatorBase
+JobOperator = runtime.JobOperator
 
 
-class DoubleValue(JobOperatorBase, bpy.types.Operator):
+class DoubleValue(JobOperator, bpy.types.Operator):
     bl_idname = "example_job.double_value"
     bl_label = "Double Value"
     job_type = "double"
@@ -106,7 +106,7 @@ class DoubleValue(JobOperatorBase, bpy.types.Operator):
 
 这个例子会提交 `{"value": 21}`。Job 成功后，`response()` 在 Blender 主线程收到结果。
 
-这里显式写出 `request()`，方便看清 Blender 与 Server 之间传递的数据。省略它时，`JobOperatorBase` 会把 Operator 声明的 Property 自动组成参数字典。`response()` 也可以省略；Job 成功后 Operator 会直接以 `FINISHED` 结束。
+这里显式写出 `request()`，方便看清 Blender 与 Server 之间传递的数据。省略它时，`JobOperator` 会把 Operator 声明的 Property 自动组成参数字典。`response()` 也可以省略；Job 成功后 Operator 会直接以 `FINISHED` 结束。
 
 ## 5. 首次使用时安装 Environment
 
@@ -122,13 +122,13 @@ class ExampleJobPanel(bpy.types.Panel):
 
     def draw(self, _context):
         layout = self.layout
-        if runtime.environment_ready():
+        runtime.draw_server_controls(layout)
+        runtime.draw_jobs(layout)
+        if runtime.can_submit():
             layout.operator("example_job.double_value")
-        else:
-            layout.operator("example_job.install_environment")
 ```
 
-首次使用时面板显示 Environment 安装按钮，安装完成后显示业务按钮。国内网络环境可以在界面中提供 `example_job.install_environment_mirror`。
+首次使用时默认控制区显示安装入口，设置窗口中可选择镜像。环境就绪后，业务按钮可在服务器停止、启动中、空闲或处理任务时执行。
 
 ## 6. 注册 Extension
 
@@ -153,7 +153,7 @@ def unregister():
         bpy.utils.unregister_class(class_type)
 ```
 
-`runtime.register()` 会注册 Environment 安装、取消 Job、Server 启停与日志相关 Operator，并把活动 Job 的进度放入 Blender 状态栏。
+`runtime.register()` 会注册 Environment 安装、取消 Job、Server 启停与日志相关 Operator；Panel 用 `runtime.draw_jobs(layout)` 绘制任务进度。
 
 ## 7. 安装并运行
 

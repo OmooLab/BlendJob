@@ -87,10 +87,10 @@ Continue in `__init__.py` and define the application Operator:
 ```python
 import bpy
 
-JobOperatorBase = runtime.JobOperatorBase
+JobOperator = runtime.JobOperator
 
 
-class DoubleValue(JobOperatorBase, bpy.types.Operator):
+class DoubleValue(JobOperator, bpy.types.Operator):
     bl_idname = "example_job.double_value"
     bl_label = "Double Value"
     job_type = "double"
@@ -106,7 +106,7 @@ class DoubleValue(JobOperatorBase, bpy.types.Operator):
 
 This example submits `{"value": 21}`. After success, `response()` receives the result on Blender's main thread.
 
-The explicit `request()` makes the data crossing from Blender to the Server easy to see. If omitted, `JobOperatorBase` automatically turns declared Operator properties into the parameter dictionary. `response()` is optional as well; without it, the Operator simply finishes with `FINISHED` after a successful job.
+The explicit `request()` makes the data crossing from Blender to the Server easy to see. If omitted, `JobOperator` automatically turns declared Operator properties into the parameter dictionary. `response()` is optional as well; without it, the Operator simply finishes with `FINISHED` after a successful job.
 
 ## 5. Install the environment on first use
 
@@ -122,13 +122,13 @@ class ExampleJobPanel(bpy.types.Panel):
 
     def draw(self, _context):
         layout = self.layout
-        if runtime.environment_ready():
+        runtime.draw_server_controls(layout)
+        runtime.draw_jobs(layout)
+        if runtime.can_submit():
             layout.operator("example_job.double_value")
-        else:
-            layout.operator("example_job.install_environment")
 ```
 
-The panel offers environment installation on first use and shows the application action once the environment is ready. Projects serving users in mainland China can also expose `example_job.install_environment_mirror`.
+The default controls offer setup on first use, including a mirror option. The application action is available when the environment is ready and the server is offline, starting, idle, or processing.
 
 ## 6. Register the extension
 
@@ -153,7 +153,7 @@ def unregister():
         bpy.utils.unregister_class(class_type)
 ```
 
-`runtime.register()` registers the environment installer, job cancellation, server controls, and log Operator. It also displays active-job progress in Blender's status bar.
+`runtime.register()` registers the environment installer, job cancellation, server controls, and log Operator. The panel displays progress with `runtime.draw_jobs(layout)`.
 
 ## 7. Install and run
 
