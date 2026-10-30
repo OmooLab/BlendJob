@@ -79,13 +79,14 @@ def test_model_resource_uses_existing_snapshot(runtime):
     assert runtime.resource("missing") == {}
 
 
-@pytest.mark.parametrize("state,submit", [
-    ("UNAVAILABLE", False), ("INSTALLING", False), ("MIGRATING", False),
-    ("OFFLINE", True), ("STARTING", True), ("IDLE", True),
-    ("PROCESSING", True), ("STOPPING", False), ("ERROR", False),
+@pytest.mark.parametrize("state,ready,submit", [
+    ("UNAVAILABLE", False, False), ("INSTALLING", False, False), ("MIGRATING", False, False),
+    ("OFFLINE", True, True), ("STARTING", True, True), ("IDLE", True, True),
+    ("PROCESSING", True, True), ("STOPPING", True, False), ("ERROR", True, False),
 ])
-def test_submission_states(runtime, monkeypatch, state, submit):
+def test_runtime_capabilities(runtime, monkeypatch, state, ready, submit):
     monkeypatch.setattr(runtime, "state", lambda: state)
+    assert runtime.is_ready() is ready
     assert runtime.can_submit() is submit
 
 

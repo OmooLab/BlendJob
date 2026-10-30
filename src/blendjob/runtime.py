@@ -669,6 +669,10 @@ class JobRuntime:
             return "PROCESSING"
         return "OFFLINE" if state == "UNAVAILABLE" else state
 
+    def is_ready(self):
+        """Return whether the environment is ready, regardless of server activity."""
+        return self.state() not in {"UNAVAILABLE", "INSTALLING", "MIGRATING"}
+
     def can_submit(self):
         """Return whether a job can be submitted, starting the server if needed."""
         return (self._operation is None or self._operation.name == "start") and self.state() in {"OFFLINE", "STARTING", "IDLE", "PROCESSING"}
