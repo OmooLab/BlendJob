@@ -9,8 +9,7 @@ from blendjob.process import ProcessServer
 def job_runtime(tmp_path, monkeypatch):
     entrypoint = tmp_path / "app.py"
     entrypoint.touch()
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path / "storage",
-                         environment={"python": "3.12"}, namespace="test")
+    runtime = JobRuntime("test", server=f"{entrypoint}:server", storage_root=tmp_path / "storage", environment={"python": "3.12"})
     monkeypatch.setattr(runtime._config, "environment_ready", Mock(return_value=True))
     monkeypatch.setattr(runtime, "enable", Mock())
     monkeypatch.setattr(runtime, "redraw_ui", Mock())

@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from pathlib import Path
 
 from .configuration import ServerConfiguration
@@ -16,22 +17,27 @@ class JobRuntime:
 
     def __init__(
         self,
-        server_entrypoint,
-        *,
-        entrypoint_root=None,
-        storage_root,
-        environment,
         namespace,
+        *,
+        environment,
+        server=None,
+        storage_root=None,
         post_setup=None,
     ):
-        self._config = ServerConfiguration(server_entrypoint, environment, entrypoint_root=entrypoint_root)
-        self.storage_root_setting = storage_root
+        if (not isinstance(namespace, str) or not namespace.isascii()
+                or not namespace.isidentifier() or namespace != namespace.lower()):
+            raise ValueError("namespace must be a lowercase identifier")
+        self.namespace = namespace
+        caller_file = sys._getframe(1).f_globals.get("__file__")
+        caller_root = Path(caller_file).resolve().parent if caller_file else None
+        entrypoint = str(server) if server is not None else "server/__init__.py:server"
+        if ":" not in entrypoint[len(Path(entrypoint).drive):]:
+            entrypoint += ":server"
+        self._config = ServerConfiguration(entrypoint, environment, entrypoint_root=caller_root)
+        self.storage_root_setting = Path.home() / f".{namespace}" if storage_root is None else storage_root
         if post_setup is not None and not callable(post_setup):
             raise TypeError("post_setup must be callable")
         self.post_setup = post_setup
-        if not isinstance(namespace, str) or not namespace.strip():
-            raise ValueError("namespace must be a non-empty string")
-        self.namespace = namespace.strip()
         self._translation_key = f"{__package__}.{self.namespace}"
         self.jobs = []
         self._operation = None

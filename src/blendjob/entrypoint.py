@@ -17,7 +17,7 @@ def normalized_entrypoint(entrypoint, root=None):
     if not path.is_absolute():
         if root is None:
             raise ValueError(
-                "relative server entrypoint requires entrypoint_root"
+                "relative server entrypoint requires a caller file; pass an absolute server path"
             )
         path = Path(root).expanduser().resolve() / path
     if path.is_dir():

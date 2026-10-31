@@ -62,5 +62,5 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(normalized, f"{entrypoint.resolve()}:server")
 
     def test_relative_entrypoint_requires_explicit_root(self):
-        with self.assertRaisesRegex(ValueError, "entrypoint_root"):
+        with self.assertRaisesRegex(ValueError, "absolute server path"):
             normalized_entrypoint("server:server")

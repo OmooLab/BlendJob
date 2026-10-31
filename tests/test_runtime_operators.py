@@ -14,8 +14,7 @@ from blendjob.runtime import JobRuntime
 def runtime(tmp_path):
     entrypoint = tmp_path / "server.py"
     entrypoint.touch()
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path / "storage",
-                         environment={"python": "3.12"}, namespace="blendjob_test")
+    runtime = JobRuntime("blendjob_test", server=f"{entrypoint}:server", storage_root=tmp_path / "storage", environment={"python": "3.12"})
     runtime._config.environment_ready = Mock(return_value=True)
     classes = runtime.operator_classes()
     for cls in classes:

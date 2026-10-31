@@ -125,8 +125,7 @@ def ignore_cancel(context, parameters):
         capture_output=True, text=True,
     )
     assert probe.returncode == 0, probe.stdout + probe.stderr
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=root,
-                         environment={"python": f"{sys.version_info.major}.{sys.version_info.minor}"}, namespace="process_test")
+    runtime = JobRuntime("process_test", server=f"{entrypoint}:server", storage_root=root, environment={"python": f"{sys.version_info.major}.{sys.version_info.minor}"})
     write_json(root / "manifest.json", {"environment_hash": runtime._config.environment_hash})
     with (
         patch.object(threading.Thread, "start", side_effect=AssertionError("Parent thread")),

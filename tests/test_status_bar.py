@@ -111,8 +111,7 @@ def test_native_blender_header_registration(tmp_path, monkeypatch):
     from blendjob import JobRuntime
     entry = tmp_path / "server.py"
     entry.touch()
-    runtime = JobRuntime(f"{entry}:server", storage_root=tmp_path,
-                         environment={"python": "3.12"}, namespace="statusbar_smoke")
+    runtime = JobRuntime("statusbar_smoke", server=f"{entry}:server", storage_root=tmp_path, environment={"python": "3.12"})
     # The bpy package has no interactive event loop; exercise the header lifecycle.
     monkeypatch.setattr(runtime, "enable", Mock())
     try:

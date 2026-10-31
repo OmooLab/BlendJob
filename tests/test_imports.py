@@ -12,8 +12,7 @@ def test_blender_runtime_does_not_load_backend_implementations(tmp_path):
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from blendjob import JobRuntime, JobResult
-runtime = JobRuntime(sys.argv[2] + ':server', storage_root=Path(sys.argv[3]),
-                     environment={'python': '3.12'}, namespace='test')
+runtime = JobRuntime('test', server=sys.argv[2] + ':server', storage_root=Path(sys.argv[3]), environment={'python': '3.12'})
 assert runtime.state() == "UNAVAILABLE"
 runtime.inspect_installation(runtime.storage_root())
 runtime.server.poll(available=False)
@@ -24,8 +23,7 @@ from blendjob import JobServer
 assert JobServer is sys.modules['blendjob.server'].JobServer
 assert 'fastapi' not in sys.modules
 assert 'bpy' not in sys.modules
-other = JobRuntime(sys.argv[2] + ':server', storage_root=Path(sys.argv[3]),
-                   environment={'python': '3.12'}, namespace='other')
+other = JobRuntime('other', server=sys.argv[2] + ':server', storage_root=Path(sys.argv[3]), environment={'python': '3.12'})
 assert runtime.JobOperator.job_runtime is runtime
 assert other.JobOperator.job_runtime is other
 assert runtime.JobOperator is not other.JobOperator

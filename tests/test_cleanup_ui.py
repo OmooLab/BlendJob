@@ -45,8 +45,7 @@ from blendjob import JobRuntime
 
 root = Path(directory)
 (root / 'server.py').touch()
-runtime = JobRuntime(f"{root / 'server.py'}:server", storage_root=root / 'storage',
-                     environment={'python': '3.11'}, namespace='cleanup_test')
+runtime = JobRuntime('cleanup_test', server=f"{root / 'server.py'}:server", storage_root=root / 'storage', environment={'python': '3.11'})
 runtime._config.environment_ready = lambda root: True
 states, actions = {}, []
 

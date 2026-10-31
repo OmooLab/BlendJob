@@ -62,8 +62,7 @@ def test_runtime_translation_lifetimes_are_independent(blender, tmp_path, monkey
     _bpy, catalogs, _settings = blender
     entrypoint = tmp_path / 'app.py'
     entrypoint.touch()
-    runtimes = [JobRuntime(f'{entrypoint}:server', storage_root=tmp_path,
-                           environment={'python': '3.12'}, namespace=name)
+    runtimes = [JobRuntime(name, server=f'{entrypoint}:server', storage_root=tmp_path, environment={'python': '3.12'})
                 for name in ('first', 'second')]
     for runtime in runtimes:
         monkeypatch.setattr(runtime, 'operator_classes', lambda: ())
@@ -87,8 +86,7 @@ def test_sidebar_translates_at_draw_time_without_changing_messages(blender, tmp_
     bpy.app.translations.register('test', TRANSLATIONS)
     entrypoint = tmp_path / 'app.py'
     entrypoint.touch()
-    runtime = JobRuntime(f'{entrypoint}:server', storage_root=tmp_path,
-                         environment={'python': '3.12'}, namespace='test')
+    runtime = JobRuntime('test', server=f'{entrypoint}:server', storage_root=tmp_path, environment={'python': '3.12'})
     job = Job(runtime, "work", {}, _job_id="job")
     runtime.jobs.append(job)
     monkeypatch.setattr(runtime, 'redraw_ui', Mock())
@@ -127,8 +125,7 @@ def test_cleanup_translates_templates_before_formatting(blender, tmp_path, trans
     bpy.props = SimpleNamespace(StringProperty=Mock(), BoolProperty=Mock())
     entrypoint = tmp_path / "app.py"
     entrypoint.touch()
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path,
-                         environment={"python": "3.12"}, namespace="test")
+    runtime = JobRuntime("test", server=f"{entrypoint}:server", storage_root=tmp_path, environment={"python": "3.12"})
     result = {"jobs": ["job"] * 12, "bytes": 3_500_000, "skipped": 1, "failed": ["busy"]}
     cls = next(cls for cls in runtime.operator_classes() if cls.bl_idname.endswith(".confirm_clear_job_files"))
     operator = SimpleNamespace(preview=json.dumps(result), layout=Mock(), report=Mock())
@@ -153,8 +150,7 @@ def test_job_progress_reaches_blender_as_template_and_arguments(blender, tmp_pat
     }})
     entrypoint = tmp_path / "app.py"
     entrypoint.touch()
-    runtime = JobRuntime(f"{entrypoint}:server", storage_root=tmp_path,
-                         environment={"python": "3.12"}, namespace="test")
+    runtime = JobRuntime("test", server=f"{entrypoint}:server", storage_root=tmp_path, environment={"python": "3.12"})
     monkeypatch.setattr(runtime, "redraw_ui", Mock())
     context = JobContext("job", "example", {}, {}, tmp_path, tmp_path)
     context.progress(0.5, "Loading {model} {count:02d}", model="MoGe {raw}", count=3)
